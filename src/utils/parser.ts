@@ -66,6 +66,35 @@ export function parseRawTxt(content: string, fileName: string): RawInjection[] {
           type,
           area: areaVal
         });
+    }
+  }
+}
+  
+  // Fallback parsing if no header was found or no injections parsed
+  if (injections.length === 0) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      
+      const parts = line.split('\t').map(p => p.trim());
+      if (parts.length >= 3) {
+        // Standard expected order: 
+        // 0: Sample Name, 1: Sample ID, 2: Injection No, 3: Type, 4: Area (last column)
+        const possibleInjNo = parseInt(parts[2], 10);
+        const possibleArea = parseFloat(parts[parts.length - 1]);
+        
+        // Ensure name is present, does not look like metadata/header [数据],
+        // and both injection number and area are valid numbers
+        if (parts[0] && !parts[0].startsWith('[') && !isNaN(possibleInjNo) && !isNaN(possibleArea)) {
+          injections.push({
+            fileName,
+            sampleName: parts[0],
+            sampleId: parts[1] || '未命名',
+            injNo: possibleInjNo,
+            type: parts[3] || 'NPOC',
+            area: possibleArea
+          });
+        }
       }
     }
   }
