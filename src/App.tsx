@@ -24,8 +24,32 @@ export default function App() {
   const [rawInjections, setRawInjections] = useState<RawInjection[]>([]);
   
   // Standard curve parameters
+  const [stdStockC, setStdStockC] = useState<number>(10000); // standard stock concentration (µmol C / L)
+  const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(25.2423); // standard dilution factor
   const [stdUsedC, setStdUsedC] = useState<number>(396.16); // used standard uM C
   const dilutionFactors = [15, 10, 6, 5, 4, 3];
+
+  const handleStdStockCChange = (val: number) => {
+    setStdStockC(val);
+    if (stdDilutionFactor > 0) {
+      setStdUsedC(Number((val / stdDilutionFactor).toFixed(4)));
+    }
+  };
+
+  const handleStdDilutionFactorChange = (val: number) => {
+    setStdDilutionFactor(val);
+    if (val > 0) {
+      setStdUsedC(Number((stdStockC / val).toFixed(4)));
+    }
+  };
+
+  const handleStdUsedCChange = (val: number) => {
+    setStdUsedC(val);
+    if (val > 0) {
+      setStdDilutionFactor(Number((stdStockC / val).toFixed(4)));
+    }
+  };
+
   const [enabledStds, setEnabledStds] = useState<Record<string, boolean>>({}); // standard group id -> enabled
   const [customDilutions, setCustomDilutions] = useState<Record<string, number>>({}); // standard group id -> dilution factor
   
@@ -111,6 +135,7 @@ export default function App() {
       setRawInjections(accumulatedInjections);
       if (detectedConc !== null) {
         setStdUsedC(detectedConc);
+        setStdDilutionFactor(Number((stdStockC / detectedConc).toFixed(4)));
       }
     }
   };
@@ -714,16 +739,41 @@ export default function App() {
                   <Settings size={18} className="text-slate-500" />
                   <span>工作曲线参数配置</span>
                 </h3>
-                <div className="input-group" style={{ marginBottom: 0 }}>
-                  <label className="input-label">配置好的标准溶液浓度 (µmol C / L)</label>
-                  <input 
-                    type="number" 
-                    className="input-field"
-                    value={stdUsedC} 
-                    onChange={e => setStdUsedC(parseFloat(e.target.value) || 0)}
-                  />
-                  <p className="text-xs text-slate-400 mt-1" style={{ marginTop: '4px' }}>
-                    ※ 系统在导入原始数据时会自动解析此数值，您也可以在上方手动修改微调。
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div className="grid-3" style={{ gap: '12px' }}>
+                    <div className="input-group" style={{ marginBottom: 0 }}>
+                      <label className="input-label">标准储备液浓度 (µmol C / L)</label>
+                      <input 
+                        type="number" 
+                        className="input-field"
+                        value={stdStockC} 
+                        onChange={e => handleStdStockCChange(parseFloat(e.target.value) || 0)}
+                        step="any"
+                      />
+                    </div>
+                    <div className="input-group" style={{ marginBottom: 0 }}>
+                      <label className="input-label">稀释倍数</label>
+                      <input 
+                        type="number" 
+                        className="input-field"
+                        value={stdDilutionFactor} 
+                        onChange={e => handleStdDilutionFactorChange(parseFloat(e.target.value) || 0)}
+                        step="any"
+                      />
+                    </div>
+                    <div className="input-group" style={{ marginBottom: 0 }}>
+                      <label className="input-label">使用浓度 (µmol C / L)</label>
+                      <input 
+                        type="number" 
+                        className="input-field font-semibold text-sky-600 bg-sky-50/10"
+                        value={stdUsedC} 
+                        onChange={e => handleStdUsedCChange(parseFloat(e.target.value) || 0)}
+                        step="any"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400" style={{ marginTop: '4px', margin: 0 }}>
+                    ※ <strong>计算说明：</strong>系统会自动根据公式 <code>使用浓度 = 储备液浓度 / 稀释倍数</code> 进行联动计算。您可以手动设置任意一项，其余项会自动更新。导入文件时也会自动提取使用浓度并反算稀释倍数。
                   </p>
                 </div>
               </div>
