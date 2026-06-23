@@ -107,9 +107,37 @@ export default function App() {
       
       const content = await new Promise<string>((resolve) => {
         const reader = new FileReader();
-        // Read as GBK to avoid Chinese character corruption
-        reader.readAsText(file, 'gbk');
-        reader.onload = () => resolve(reader.result as string);
+        reader.readAsArrayBuffer(file);
+        reader.onload = () => {
+          const buffer = reader.result as ArrayBuffer;
+          const arr = new Uint8Array(buffer);
+          
+          // 1. Check Byte Order Mark (BOM)
+          if (arr.length >= 2) {
+            if (arr[0] === 0xFF && arr[1] === 0xFE) {
+              resolve(new TextDecoder('utf-16le').decode(buffer));
+              return;
+            }
+            if (arr[0] === 0xFE && arr[1] === 0xFF) {
+              resolve(new TextDecoder('utf-16be').decode(buffer));
+              return;
+            }
+          }
+          if (arr.length >= 3 && arr[0] === 0xEF && arr[1] === 0xBB && arr[2] === 0xBF) {
+            resolve(new TextDecoder('utf-8').decode(buffer.slice(3)));
+            return;
+          }
+
+          // 2. Try UTF-8 (strict)
+          try {
+            const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+            resolve(utf8Decoder.decode(buffer));
+          } catch (e) {
+            // 3. Fallback to GB18030/GBK
+            const gbkDecoder = new TextDecoder('gb18030');
+            resolve(gbkDecoder.decode(buffer));
+          }
+        };
       });
       
       const parsed = parseRawTxt(content, file.name);
@@ -699,7 +727,7 @@ export default function App() {
                 <Upload className="dropzone-icon" />
                 <div>
                   <h3 className="font-semibold text-lg" style={{ margin: '0 0 4px' }}>拖拽原始文本到此处，或点击浏览</h3>
-                  <p className="text-sm text-slate-400">支持批量选择，系统会自动处理 GBK 字符集，完全防止中文乱码</p>
+                  <p className="text-sm text-slate-400">支持批量选择，系统会自动识别 UTF-8、GBK、UTF-16 等多种字符集，完全防止中文乱码</p>
                 </div>
               </div>
 
@@ -826,7 +854,7 @@ export default function App() {
                   <p className="text-sm text-slate-500" style={{ maxWidth: '300px', margin: '0 auto' }}>
                     {rawInjections.length > 0 
                       ? `已成功加载了 ${processedSamples.length} 个独立样品的测量数据，点击下一步进行拟合曲线校验。` 
-                      : "请在上方上传仪器输出的 txt 数据。原始文件通常为 GBK 编码。"}
+                      : "请在上方上传仪器输出的 txt 数据。系统支持自动识别各种编码。"}
                   </p>
                 </div>
               </div>
