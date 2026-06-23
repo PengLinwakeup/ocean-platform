@@ -27,7 +27,7 @@ export default function App() {
   const [stdStockC, setStdStockC] = useState<number>(10000); // standard stock concentration (µmol C / L)
   const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(25.2423); // standard dilution factor
   const [stdUsedC, setStdUsedC] = useState<number>(396.16); // used standard uM C
-  const dilutionFactors = [15, 10, 6, 5, 4, 3];
+  const [dilutionFactors, setDilutionFactors] = useState<number[]>([15, 10, 6, 5, 4, 3]);
 
   const handleStdStockCChange = (val: number) => {
     setStdStockC(val);
@@ -300,6 +300,7 @@ export default function App() {
 
       return {
         id: std.id,
+        index,
         sampleName: std.sampleName,
         avArea: std.avArea,
         dilution: currentDilution,
@@ -739,7 +740,7 @@ export default function App() {
                   <Settings size={18} className="text-slate-500" />
                   <span>工作曲线参数配置</span>
                 </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div className="grid-3" style={{ gap: '12px' }}>
                     <div className="input-group" style={{ marginBottom: 0 }}>
                       <label className="input-label">标准储备液浓度 (µmol C / L)</label>
@@ -752,7 +753,7 @@ export default function App() {
                       />
                     </div>
                     <div className="input-group" style={{ marginBottom: 0 }}>
-                      <label className="input-label">稀释倍数</label>
+                      <label className="input-label">配置稀释倍数 (转为使用浓度)</label>
                       <input 
                         type="number" 
                         className="input-field"
@@ -772,9 +773,47 @@ export default function App() {
                       />
                     </div>
                   </div>
-                  <p className="text-xs text-slate-400" style={{ marginTop: '4px', margin: 0 }}>
-                    ※ <strong>计算说明：</strong>系统会自动根据公式 <code>使用浓度 = 储备液浓度 / 稀释倍数</code> 进行联动计算。您可以手动设置任意一项，其余项会自动更新。导入文件时也会自动提取使用浓度并反算稀释倍数。
+                  
+                  <p className="text-xs text-slate-400" style={{ margin: 0 }}>
+                    ※ <strong>计算说明：</strong><code>使用浓度 = 储备液浓度 / 配置稀释倍数</code>。系统会自动在上述三者间进行联动计算。
                   </p>
+
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                    <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      标准工作曲线 6个梯度稀释点 配置
+                    </h4>
+                    <div className="grid-3" style={{ gap: '12px' }}>
+                      {dilutionFactors.map((factor, index) => {
+                        const calculatedC = stdUsedC / factor;
+                        return (
+                          <div key={index} className="input-group" style={{ marginBottom: 0, padding: '10px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              梯度点 {index + 1}
+                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>稀释倍数:</span>
+                              <input 
+                                type="number" 
+                                className="input-field"
+                                style={{ padding: '4px 8px', fontSize: '13px', flex: 1, minWidth: 0 }}
+                                value={factor} 
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  const newFactors = [...dilutionFactors];
+                                  newFactors[index] = val;
+                                  setDilutionFactors(newFactors);
+                                }}
+                                step="any"
+                              />
+                            </div>
+                            <div style={{ fontSize: '11px', color: 'var(--primary)', marginTop: '6px', fontWeight: 600 }}>
+                              理论浓度: {isNaN(calculatedC) || !isFinite(calculatedC) ? '0.00' : calculatedC.toFixed(2)} µmol/L
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -932,6 +971,11 @@ export default function App() {
                             onChange={e => {
                               const val = parseFloat(e.target.value);
                               if (!isNaN(val) && val > 0) {
+                                if (std.index !== undefined && std.index < dilutionFactors.length) {
+                                  const newFactors = [...dilutionFactors];
+                                  newFactors[std.index] = val;
+                                  setDilutionFactors(newFactors);
+                                }
                                 setCustomDilutions(prev => ({
                                   ...prev,
                                   [std.id]: val
@@ -940,6 +984,7 @@ export default function App() {
                             }}
                             className="input-field py-1 px-2 text-xs" 
                             style={{ width: '70px' }}
+                            step="any"
                           />
                         </td>
                         <td className="font-semibold">{std.theoreticalC.toFixed(2)}</td>
