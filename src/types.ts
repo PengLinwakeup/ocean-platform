@@ -26,6 +26,18 @@ export interface SampleGroup {
   // Parsed metadata
   station: string | null;
   depth: number | null;
+  longitude?: number;
+  latitude?: number;
+  botDepth?: number;
+}
+
+export interface ExcelSampleInfo {
+  labelId: string;
+  station: string;
+  depth: number;
+  longitude: number;
+  latitude: number;
+  botDepth?: number;
 }
 
 export interface StdPoint {
