@@ -10,7 +10,7 @@ import { parseStationCoordinates, normalizeStationName } from './utils/stationPa
 import { RawInjection, SampleGroup, ExcelSampleInfo } from './types';
 import { 
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, 
-  CartesianGrid, Tooltip, Legend
+  CartesianGrid, Tooltip, Legend, ErrorBar
 } from 'recharts';
 import * as xlsx from 'xlsx';
 import { contours } from 'd3-contour';
@@ -843,6 +843,97 @@ export default function App() {
     }));
   };
 
+  const chart1dContainerRef = useRef<HTMLDivElement>(null);
+
+  const download1DPlot = () => {
+    const container = chart1dContainerRef.current;
+    if (!container) return;
+    const svg = container.querySelector('svg');
+    if (!svg) return;
+    
+    const scale = 3; // 3x high-definition scale
+    const svgWidth = svg.clientWidth || svg.width.baseVal.value || 500;
+    const svgHeight = svg.clientHeight || svg.height.baseVal.value || 400;
+    
+    const combinedCanvas = document.createElement('canvas');
+    combinedCanvas.width = svgWidth * scale;
+    combinedCanvas.height = svgHeight * scale;
+    const ctx = combinedCanvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, svgWidth, svgHeight);
+    
+    // Clone SVG and set explicit viewBox and dimensions
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute('width', svgWidth.toString());
+    clone.setAttribute('height', svgHeight.toString());
+    if (!clone.getAttribute('viewBox')) {
+      clone.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
+    }
+    
+    const svgString = new XMLSerializer().serializeToString(clone);
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      
+      const link = document.createElement('a');
+      link.download = `${selectedStation || 'ST'}_1D_Profile.png`;
+      link.href = combinedCanvas.toDataURL('image/png');
+      link.click();
+    };
+    img.src = url;
+  };
+
+  const download2DPlot = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const svg = canvas.nextElementSibling as SVGSVGElement | null;
+    if (!svg) return;
+    
+    const scale = 3; // 3x high-definition scale
+    const combinedCanvas = document.createElement('canvas');
+    combinedCanvas.width = 620 * scale;
+    combinedCanvas.height = 450 * scale;
+    const ctx = combinedCanvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.scale(scale, scale);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 620, 450);
+    ctx.drawImage(canvas, 50, 30, 500, 380);
+    
+    // Clone SVG and set explicit viewBox and dimensions
+    const clone = svg.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute('width', '620');
+    clone.setAttribute('height', '450');
+    if (!clone.getAttribute('viewBox')) {
+      clone.setAttribute('viewBox', '0 0 620 450');
+    }
+    
+    const svgString = new XMLSerializer().serializeToString(clone);
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      
+      const link = document.createElement('a');
+      link.download = `${selectedStation || 'DOC'}_2D_Contour.png`;
+      link.href = combinedCanvas.toDataURL('image/png');
+      link.click();
+    };
+    img.src = url;
+  };
+
   // 2D Contour Plot Calculations & Drawing
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [contourSvgPaths, setContourSvgPaths] = useState<{ path: string; value: number }[]>([]);
@@ -949,18 +1040,43 @@ export default function App() {
 
     for (let cy = 0; cy < canvasHeight; cy++) {
       const gridYRatio = cy / (canvasHeight - 1);
-      const gridRow = Math.min(Math.floor(gridYRatio * gridHeight), gridHeight - 1);
+      const gy = gridYRatio * (gridHeight - 1);
+      const y0 = Math.floor(gy);
+      const y1 = Math.min(y0 + 1, gridHeight - 1);
+      const ty = gy - y0;
       
       for (let cx = 0; cx < canvasWidth; cx++) {
         const gridXRatio = cx / (canvasWidth - 1);
-        const gridCol = Math.min(Math.floor(gridXRatio * gridWidth), gridWidth - 1);
+        const gx = gridXRatio * (gridWidth - 1);
+        const x0 = Math.floor(gx);
+        const x1 = Math.min(x0 + 1, gridWidth - 1);
+        const tx = gx - x0;
         
-        const val = gridValues[gridRow * gridWidth + gridCol];
+        const v00 = gridValues[y0 * gridWidth + x0];
+        const v10 = gridValues[y0 * gridWidth + x1];
+        const v01 = gridValues[y1 * gridWidth + x0];
+        const v11 = gridValues[y1 * gridWidth + x1];
+        
+        // Bilinear interpolation for ultra-smooth rendering
+        const val = v00 * (1 - tx) * (1 - ty) + 
+                    v10 * tx * (1 - ty) + 
+                    v01 * (1 - tx) * ty + 
+                    v11 * tx * ty;
         const hexColor = colorScale(val);
         
-        const rVal = parseInt(hexColor.slice(1, 3), 16);
-        const gVal = parseInt(hexColor.slice(3, 5), 16);
-        const bVal = parseInt(hexColor.slice(5, 7), 16);
+        let rVal = 0, gVal = 0, bVal = 0;
+        if (hexColor.startsWith('#')) {
+          rVal = parseInt(hexColor.slice(1, 3), 16);
+          gVal = parseInt(hexColor.slice(3, 5), 16);
+          bVal = parseInt(hexColor.slice(5, 7), 16);
+        } else {
+          const match = hexColor.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+          if (match) {
+            rVal = parseInt(match[1], 10);
+            gVal = parseInt(match[2], 10);
+            bVal = parseInt(match[3], 10);
+          }
+        }
         
         const pixelIdx = (cy * canvasWidth + cx) * 4;
         imgData.data[pixelIdx] = rVal;
@@ -1351,7 +1467,7 @@ export default function App() {
                         />
                       </div>
                       <p className="text-xs text-slate-400" style={{ margin: 0, flex: 1, minWidth: '240px' }}>
-                        ※ <strong>清洗规则：</strong>DOC 测定进样时，若发生空针、吸气泡（扎空）等异常现象，峰面积通常会接近 0（正常水样一般在 1.0 以上）。低于该阈值的进样数据会被**自动排除**，不参与均值计算，确保结果可靠。
+                        ※ <strong>清洗规则：</strong>DOC 测定进样时，若发生空针、吸气泡（扎空）等异常现象，峰面积通常会接近 0（正常水样一般在 1.0 以上）。低于该阈值的进样数据会被<strong>自动排除</strong>，不参与均值计算，确保结果可靠。
                       </p>
                     </div>
                   </div>
@@ -1894,8 +2010,19 @@ export default function App() {
                 </div>
 
                 <div className="card">
-                  <h3 className="card-title">{selectedStation} 站位 DOC 垂直剖面图 (Depth Profile)</h3>
-                  <div style={{ width: '100%', height: '400px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <h3 className="card-title" style={{ margin: 0 }}>{selectedStation} 站位 DOC 垂直剖面图 (Depth Profile)</h3>
+                    <button 
+                      className="btn btn-secondary" 
+                      style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      onClick={download1DPlot}
+                    >
+                      <Download size={14} />
+                      <span>保存图片</span>
+                    </button>
+                  </div>
+                  
+                  <div ref={chart1dContainerRef} style={{ width: '100%', height: '400px' }}>
                     {chart1dData.length === 0 ? (
                       <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
                         该站位没有可绘制的深度数据点
@@ -1903,16 +2030,25 @@ export default function App() {
                     ) : (
                       <ResponsiveContainer width="100%" height="100%">
                         <ScatterChart margin={{ top: 20, right: 30, bottom: 20, left: 30 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                          <defs>
+                            <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#0ea5e9" />
+                              <stop offset="100%" stopColor="#2563eb" />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={true} horizontal={true} />
                           <XAxis 
                             type="number" 
                             dataKey="concentration" 
                             name="DOC 浓度" 
                             unit=" µmol/L" 
                             stroke="#475569" 
-                            fontSize={12}
-                            domain={['auto', 'auto']}
+                            fontSize={11}
+                            fontWeight="600"
+                            domain={['dataMin - 5', 'dataMax + 5']}
                             orientation="top"
+                            axisLine={{ stroke: '#cbd5e1' }}
+                            tickLine={{ stroke: '#cbd5e1' }}
                           />
                           <YAxis 
                             type="number" 
@@ -1920,24 +2056,56 @@ export default function App() {
                             name="深度" 
                             unit=" m" 
                             stroke="#475569" 
-                            fontSize={12}
+                            fontSize={11}
+                            fontWeight="600"
                             reversed
                             domain={[0, 'dataMax + 100']}
+                            axisLine={{ stroke: '#cbd5e1' }}
+                            tickLine={{ stroke: '#cbd5e1' }}
                           />
                           <Tooltip 
-                            cursor={{ strokeDasharray: '3 3' }} 
+                            cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '4 4' }} 
+                            contentStyle={{ 
+                              backgroundColor: 'rgba(255, 255, 255, 0.95)', 
+                              borderRadius: '8px', 
+                              border: '1px solid #e2e8f0',
+                              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                              fontSize: '12px'
+                            }}
                             formatter={(value, name) => {
-                              if (name === "DOC 浓度") return [`${value} µmol/L`, "浓度"];
-                              if (name === "深度") return [`${value} m`, "深度"];
+                              if (name === "DOC 浓度") return [`${value} µmol/L`, "DOC 浓度"];
+                              if (name === "深度") return [`${value} m`, "测量深度"];
                               return [value, name];
                             }}
                           />
                           <Scatter 
                             name="DOC 测定值" 
                             data={chart1dData} 
-                            fill="#0284c7" 
-                            line={{ stroke: '#0284c7', strokeWidth: 1.5 }}
-                          />
+                            fill="url(#lineGrad)" 
+                            line={{ stroke: '#2563eb', strokeWidth: 2 }}
+                            shape={(props: any) => {
+                              const { cx, cy } = props;
+                              return (
+                                <circle 
+                                  cx={cx} 
+                                  cy={cy} 
+                                  r={5} 
+                                  fill="#2563eb" 
+                                  stroke="#ffffff" 
+                                  strokeWidth={1.5}
+                                  style={{ filter: 'drop-shadow(0px 2px 4px rgba(37, 99, 235, 0.3))' }}
+                                />
+                              );
+                            }}
+                          >
+                            <ErrorBar 
+                              dataKey="error" 
+                              direction="x" 
+                              stroke="#94a3b8" 
+                              strokeWidth={1} 
+                              width={4} 
+                            />
+                          </Scatter>
                         </ScatterChart>
                       </ResponsiveContainer>
                     )}
@@ -2148,8 +2316,18 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: '660px', overflowX: 'auto' }}>
-                  <h3 className="card-title" style={{ alignSelf: 'flex-start' }}>DOC 空间断面等值线分布图</h3>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '660px', overflowX: 'auto' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', width: '100%' }}>
+                    <h3 className="card-title" style={{ margin: 0 }}>DOC 空间断面等值线分布图</h3>
+                    <button 
+                      className="btn btn-secondary" 
+                      style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      onClick={download2DPlot}
+                    >
+                      <Download size={14} />
+                      <span>保存图片</span>
+                    </button>
+                  </div>
                   
                   {/* ODV styled window container */}
                   <div style={{ position: 'relative', width: '620px', height: '450px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
@@ -2173,6 +2351,10 @@ export default function App() {
                         <clipPath id="plot-area-clip">
                           <rect x={50} y={30} width={500} height={380} />
                         </clipPath>
+                        <linearGradient id="bathyGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#1e293b" stopOpacity="0.85" />
+                          <stop offset="100%" stopColor="#0b0f19" stopOpacity="0.95" />
+                        </linearGradient>
                       </defs>
 
                       {/* Contour lines (clipped to canvas box) */}
@@ -2195,8 +2377,8 @@ export default function App() {
                           <path
                             d={bathyPath}
                             transform="translate(50, 30)"
-                            fill="#1c1917"
-                            stroke="#ffffff"
+                            fill="url(#bathyGrad)"
+                            stroke="#0ea5e9"
                             strokeWidth="2.5"
                           />
                         )}
