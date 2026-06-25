@@ -1,35 +1,46 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { 
-  Upload, FileText, LineChart, 
-  Map, Download, Trash2, CheckCircle, AlertTriangle, 
+import {
+  Upload, FileText, LineChart,
+  Map, Download, Trash2, CheckCircle, AlertTriangle,
   Settings, ChevronLeft, ChevronRight, Check
 } from 'lucide-react';
 import { parseRawTxt } from './utils/parser';
 import { selectBestSubset, fitCalibrationCurve, interpolateIDW, calculateMean, calculateStdev } from './utils/calc';
 import { parseStationCoordinates, normalizeStationName } from './utils/stationParser';
 import { RawInjection, SampleGroup, ExcelSampleInfo } from './types';
-import { 
-  ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, 
+import {
+  ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ErrorBar
 } from 'recharts';
 import * as xlsx from 'xlsx';
 import { contours } from 'd3-contour';
 import { scaleLinear } from 'd3-scale';
 
+const loadSavedState = <T,>(key: string, defaultValue: T): T => {
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved === null) return defaultValue;
+    return JSON.parse(saved) as T;
+  } catch (e) {
+    console.error(`Error parsing localStorage key "${key}":`, e);
+    return defaultValue;
+  }
+};
+
 export default function App() {
-  const [currentStep, setCurrentStep] = useState<number>(1);
-  const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>('profile1d');
-  
+  const [currentStep, setCurrentStep] = useState<number>(() => loadSavedState('ocean_currentStep', 1));
+  const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>(() => loadSavedState<'profile1d' | 'contour2d'>('ocean_visSubTab', 'profile1d'));
+
   // File management state
-  const [files, setFiles] = useState<{ name: string; size: number }[]>([]);
-  const [rawInjections, setRawInjections] = useState<RawInjection[]>([]);
-  const [stationCoords, setStationCoords] = useState<ExcelSampleInfo[]>([]);
-  
+  const [files, setFiles] = useState<{ name: string; size: number }[]>(() => loadSavedState('ocean_files', []));
+  const [rawInjections, setRawInjections] = useState<RawInjection[]>(() => loadSavedState('ocean_rawInjections', []));
+  const [stationCoords, setStationCoords] = useState<ExcelSampleInfo[]>(() => loadSavedState('ocean_stationCoords', []));
+
   // Standard curve parameters
-  const [stdStockC, setStdStockC] = useState<number>(10000); // standard stock concentration (µmol C / L)
-  const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(25.2423); // standard dilution factor
-  const [stdUsedC, setStdUsedC] = useState<number>(396.16); // used standard uM C
-  const [dilutionFactors, setDilutionFactors] = useState<number[]>([15, 10, 6, 5, 4, 3]);
+  const [stdStockC, setStdStockC] = useState<number>(() => loadSavedState('ocean_stdStockC', 10000)); // standard stock concentration (µmol C / L)
+  const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(() => loadSavedState('ocean_stdDilutionFactor', 25.2423)); // standard dilution factor
+  const [stdUsedC, setStdUsedC] = useState<number>(() => loadSavedState('ocean_stdUsedC', 396.16)); // used standard uM C
+  const [dilutionFactors, setDilutionFactors] = useState<number[]>(() => loadSavedState('ocean_dilutionFactors', [15, 10, 6, 5, 4, 3]));
 
   const handleStdStockCChange = (val: number) => {
     setStdStockC(val);
@@ -52,30 +63,70 @@ export default function App() {
     }
   };
 
-  const [enabledStds, setEnabledStds] = useState<Record<string, boolean>>({}); // standard group id -> enabled
-  const [customDilutions, setCustomDilutions] = useState<Record<string, number>>({}); // standard group id -> dilution factor
-  
+  const [enabledStds, setEnabledStds] = useState<Record<string, boolean>>(() => loadSavedState('ocean_enabledStds', {})); // standard group id -> enabled
+  const [customDilutions, setCustomDilutions] = useState<Record<string, number>>(() => loadSavedState('ocean_customDilutions', {})); // standard group id -> dilution factor
+
   // Sample manual overrides
-  const [excludedInjections, setExcludedInjections] = useState<Record<string, boolean[]>>({}); // group id -> boolean array of excluded injections
-  const [rejectedSamples, setRejectedSamples] = useState<Record<string, boolean>>({}); // group id -> rejected boolean
-  
+  const [excludedInjections, setExcludedInjections] = useState<Record<string, boolean[]>>(() => loadSavedState('ocean_excludedInjections', {})); // group id -> boolean array of excluded injections
+  const [rejectedSamples, setRejectedSamples] = useState<Record<string, boolean>>(() => loadSavedState('ocean_rejectedSamples', {})); // group id -> rejected boolean
+
   // Visualization options
-  const [selectedStation, setSelectedStation] = useState<string>('');
-  const [docMin, setDocMin] = useState<number>(40);
-  const [docMax, setDocMax] = useState<number>(80);
-  const [contourStep, setContourStep] = useState<number>(5);
-  const [idwPower, setIdwPower] = useState<number>(2);
-  const [sampleSortOrder, setSampleSortOrder] = useState<'import' | 'category' | 'name' | 'concentration'>('category');
-  const [selectedCurveId, setSelectedCurveId] = useState<string>('');
-  const [emptyInjectionThreshold, setEmptyInjectionThreshold] = useState<number>(0.1);
+  const [selectedStation, setSelectedStation] = useState<string>(() => loadSavedState('ocean_selectedStation', ''));
+  const [docMin, setDocMin] = useState<number>(() => loadSavedState('ocean_docMin', 40));
+  const [docMax, setDocMax] = useState<number>(() => loadSavedState('ocean_docMax', 80));
+  const [contourStep, setContourStep] = useState<number>(() => loadSavedState('ocean_contourStep', 5));
+  const [idwPower, setIdwPower] = useState<number>(() => loadSavedState('ocean_idwPower', 2));
+  const [sampleSortOrder, setSampleSortOrder] = useState<'import' | 'category' | 'name' | 'concentration'>(() => loadSavedState<'import' | 'category' | 'name' | 'concentration'>('ocean_sampleSortOrder', 'category'));
+  const [selectedCurveId, setSelectedCurveId] = useState<string>(() => loadSavedState('ocean_selectedCurveId', ''));
+  const [emptyInjectionThreshold, setEmptyInjectionThreshold] = useState<number>(() => loadSavedState('ocean_emptyInjectionThreshold', 0.1));
+  const [anisotropyFactor, setAnisotropyFactor] = useState<number>(() => loadSavedState('ocean_anisotropyFactor', 15));
 
   // ODV-style and Background Map states
-  const [contourXAxis, setContourXAxis] = useState<'station' | 'longitude' | 'latitude'>('station');
-  const [minDepthFilter, setMinDepthFilter] = useState<number>(0);
-  const [maxDepthFilter, setMaxDepthFilter] = useState<number>(6000);
-  const [minXFilter, setMinXFilter] = useState<number>(-180);
-  const [maxXFilter, setMaxXFilter] = useState<number>(180);
-  const [showBackgroundMap, setShowBackgroundMap] = useState<boolean>(false);
+  const [contourXAxis, setContourXAxis] = useState<'station' | 'longitude' | 'latitude'>(() => loadSavedState<'station' | 'longitude' | 'latitude'>('ocean_contourXAxis', 'station'));
+  const [minDepthFilter, setMinDepthFilter] = useState<number>(() => loadSavedState('ocean_minDepthFilter', 0));
+  const [maxDepthFilter, setMaxDepthFilter] = useState<number>(() => loadSavedState('ocean_maxDepthFilter', 6000));
+  const [minXFilter, setMinXFilter] = useState<number>(() => loadSavedState('ocean_minXFilter', -180));
+  const [maxXFilter, setMaxXFilter] = useState<number>(() => loadSavedState('ocean_maxXFilter', 180));
+  const [showBackgroundMap] = useState<boolean>(() => loadSavedState('ocean_showBackgroundMap', false));
+
+  // Save state to LocalStorage for persistence
+  useEffect(() => {
+    localStorage.setItem('ocean_currentStep', JSON.stringify(currentStep));
+    localStorage.setItem('ocean_visSubTab', JSON.stringify(visSubTab));
+    localStorage.setItem('ocean_files', JSON.stringify(files));
+    localStorage.setItem('ocean_rawInjections', JSON.stringify(rawInjections));
+    localStorage.setItem('ocean_stationCoords', JSON.stringify(stationCoords));
+    localStorage.setItem('ocean_stdStockC', JSON.stringify(stdStockC));
+    localStorage.setItem('ocean_stdDilutionFactor', JSON.stringify(stdDilutionFactor));
+    localStorage.setItem('ocean_stdUsedC', JSON.stringify(stdUsedC));
+    localStorage.setItem('ocean_dilutionFactors', JSON.stringify(dilutionFactors));
+    localStorage.setItem('ocean_enabledStds', JSON.stringify(enabledStds));
+    localStorage.setItem('ocean_customDilutions', JSON.stringify(customDilutions));
+    localStorage.setItem('ocean_excludedInjections', JSON.stringify(excludedInjections));
+    localStorage.setItem('ocean_rejectedSamples', JSON.stringify(rejectedSamples));
+    localStorage.setItem('ocean_selectedStation', JSON.stringify(selectedStation));
+    localStorage.setItem('ocean_docMin', JSON.stringify(docMin));
+    localStorage.setItem('ocean_docMax', JSON.stringify(docMax));
+    localStorage.setItem('ocean_contourStep', JSON.stringify(contourStep));
+    localStorage.setItem('ocean_idwPower', JSON.stringify(idwPower));
+    localStorage.setItem('ocean_sampleSortOrder', JSON.stringify(sampleSortOrder));
+    localStorage.setItem('ocean_selectedCurveId', JSON.stringify(selectedCurveId));
+    localStorage.setItem('ocean_emptyInjectionThreshold', JSON.stringify(emptyInjectionThreshold));
+    localStorage.setItem('ocean_anisotropyFactor', JSON.stringify(anisotropyFactor));
+    localStorage.setItem('ocean_contourXAxis', JSON.stringify(contourXAxis));
+    localStorage.setItem('ocean_minDepthFilter', JSON.stringify(minDepthFilter));
+    localStorage.setItem('ocean_maxDepthFilter', JSON.stringify(maxDepthFilter));
+    localStorage.setItem('ocean_minXFilter', JSON.stringify(minXFilter));
+    localStorage.setItem('ocean_maxXFilter', JSON.stringify(maxXFilter));
+    localStorage.setItem('ocean_showBackgroundMap', JSON.stringify(showBackgroundMap));
+  }, [
+    currentStep, visSubTab, files, rawInjections, stationCoords, stdStockC,
+    stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
+    excludedInjections, rejectedSamples, selectedStation, docMin, docMax,
+    contourStep, idwPower, sampleSortOrder, selectedCurveId,
+    emptyInjectionThreshold, anisotropyFactor, contourXAxis, minDepthFilter,
+    maxDepthFilter, minXFilter, maxXFilter, showBackgroundMap
+  ]);
 
 
 
@@ -100,7 +151,7 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragActiveRaw(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       await processRawFiles(Array.from(e.dataTransfer.files));
     }
@@ -126,7 +177,7 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     setIsDragActiveCoord(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       await processCoordFiles(Array.from(e.dataTransfer.files));
     }
@@ -154,7 +205,7 @@ export default function App() {
           reader.onload = () => {
             const buffer = reader.result as ArrayBuffer;
             const arr = new Uint8Array(buffer);
-            
+
             // 1. Check Byte Order Mark (BOM)
             if (arr.length >= 2) {
               if (arr[0] === 0xFF && arr[1] === 0xFE) {
@@ -182,7 +233,7 @@ export default function App() {
             }
           };
         });
-        
+
         const parsed = parseRawTxt(content, file.name);
         accumulatedInjections = [...accumulatedInjections, ...parsed];
 
@@ -228,7 +279,8 @@ export default function App() {
         const buffer = await file.arrayBuffer();
         const coords = parseStationCoordinates(buffer);
         if (coords.length > 0) {
-          newCoords = [...newCoords, ...coords];
+          const coordsWithFile = coords.map(c => ({ ...c, fileName: file.name }));
+          newCoords = [...newCoords, ...coordsWithFile];
         }
       } catch (err) {
         console.error("Error parsing station coordinates file:", err);
@@ -241,7 +293,7 @@ export default function App() {
         setStationCoords(prev => {
           const merged = [...prev];
           newCoords.forEach(c => {
-            const idx = merged.findIndex(m => 
+            const idx = merged.findIndex(m =>
               normalizeStationName(m.labelId) === normalizeStationName(c.labelId) &&
               normalizeStationName(m.station) === normalizeStationName(c.station) &&
               m.depth === c.depth
@@ -268,26 +320,65 @@ export default function App() {
     setRejectedSamples({});
     setSelectedStation('');
     setCurrentStep(1);
+
+    // Clean up localStorage to prevent lingering data
+    const keys = [
+      'ocean_currentStep', 'ocean_visSubTab', 'ocean_files', 'ocean_rawInjections',
+      'ocean_stationCoords', 'ocean_stdStockC', 'ocean_stdDilutionFactor', 'ocean_stdUsedC',
+      'ocean_dilutionFactors', 'ocean_enabledStds', 'ocean_customDilutions',
+      'ocean_excludedInjections', 'ocean_rejectedSamples', 'ocean_selectedStation',
+      'ocean_docMin', 'ocean_docMax', 'ocean_contourStep', 'ocean_idwPower',
+      'ocean_sampleSortOrder', 'ocean_selectedCurveId', 'ocean_emptyInjectionThreshold',
+      'ocean_anisotropyFactor', 'ocean_contourXAxis', 'ocean_minDepthFilter',
+      'ocean_maxDepthFilter', 'ocean_minXFilter', 'ocean_maxXFilter', 'ocean_showBackgroundMap'
+    ];
+    keys.forEach(k => localStorage.removeItem(k));
+  };
+
+  const removeFile = (fileName: string) => {
+    setFiles(prev => prev.filter(f => f.name !== fileName));
+    setRawInjections(prev => prev.filter(inj => inj.fileName !== fileName));
+    setStationCoords(prev => prev.filter(c => (c as any).fileName !== fileName));
+
+    // Clean up manual exclusions and rejections for sample groups belonging to this file
+    setExcludedInjections(prev => {
+      const copy = { ...prev };
+      Object.keys(copy).forEach(key => {
+        if (key.startsWith(`${fileName}::`)) {
+          delete copy[key];
+        }
+      });
+      return copy;
+    });
+    setRejectedSamples(prev => {
+      const copy = { ...prev };
+      Object.keys(copy).forEach(key => {
+        if (key.startsWith(`${fileName}::`)) {
+          delete copy[key];
+        }
+      });
+      return copy;
+    });
   };
 
   // Group raw injections into Sample Groups
   const sampleGroups = useMemo(() => {
     if (rawInjections.length === 0) return [];
-    
+
     const groups: {
       sampleName: string;
       sampleId: string;
       fileName: string;
       injections: number[];
     }[] = [];
-    
+
     let currentGroup: {
       sampleName: string;
       sampleId: string;
       fileName: string;
       injections: number[];
     } | null = null;
-    
+
     // Group injections by splitting when we encounter injNo === 1
     for (const inj of rawInjections) {
       if (inj.injNo === 1) {
@@ -313,18 +404,28 @@ export default function App() {
     // Finalize groups: calculate average, standard deviation, classifications
     return groups.map((g, idx) => {
       const id = `${g.fileName}::${g.sampleName}::${g.sampleId}::${idx}`;
-      
+
       const isStd = g.sampleName.toLowerCase().includes('std');
       const isBlank = g.sampleName.toLowerCase().includes('blank') || g.sampleName.toLowerCase().includes('mq');
       const isSeawater = g.sampleName.toLowerCase() === 'dsw' || g.sampleName.toLowerCase() === 'ssw' || g.sampleName.toLowerCase().startsWith('sw');
-      
+
       // Try matching via Excel sample info (Label ID matching sampleName)
       const normName = normalizeStationName(g.sampleName);
-      const excelMatch = stationCoords.find(c => normalizeStationName(c.labelId) === normName);
-      
+      let excelMatch = stationCoords.find(c => normalizeStationName(c.labelId) === normName);
+
+      // Fuzzy/Partial matching fallback: check if one contains the other (for non-standard names)
+      if (!excelMatch && normName) {
+        excelMatch = stationCoords.find(c => {
+          const normLabel = normalizeStationName(c.labelId);
+          if (!normLabel) return false;
+          // Check if one contains the other (e.g., "so30841459" contains "41459" or vice versa)
+          return normName.includes(normLabel) || normLabel.includes(normName);
+        });
+      }
+
       let station: string | null = null;
       let depth: number | null = null;
-      
+
       if (excelMatch) {
         station = excelMatch.station;
         depth = excelMatch.depth;
@@ -351,7 +452,7 @@ export default function App() {
 
       // Check if user has manual exclusions for injections
       const manualExclusions = excludedInjections[id];
-      
+
       let finalSelected: boolean[];
       let finalMean: number;
       let finalSd: number;
@@ -443,23 +544,23 @@ export default function App() {
       intercept: number;
       rsq: number;
     }[] = [];
-    
+
     let currentCurveStds: any[] = [];
     let currentCurveFile = '';
     let hadSamplesSinceLastStd = false;
-    
+
     // Group standard samples into curves
     sampleGroups.forEach((group) => {
       if (group.isStd) {
         // Decide if we start a new curve
         const isDifferentFile = currentCurveFile && group.fileName !== currentCurveFile;
         const shouldStartNew = currentCurveStds.length === 0 || isDifferentFile || hadSamplesSinceLastStd;
-        
+
         if (shouldStartNew) {
           currentCurveStds = [group];
           currentCurveFile = group.fileName;
           hadSamplesSinceLastStd = false;
-          
+
           const curveId = `curve_${curves.length}`;
           curves.push({
             id: curveId,
@@ -482,27 +583,27 @@ export default function App() {
         }
       }
     });
-    
+
     // Fit each curve
     return curves.map(curve => {
       const activePoints: { x: number; y: number }[] = [];
-      
+
       const detailedStandards = curve.standards.map((std, index) => {
         let matchedUsedC = stdUsedC;
         const cMatch = std.sampleName.match(/std\((\d+\.?\d*)uM/i);
         if (cMatch) {
           matchedUsedC = parseFloat(cMatch[1]);
         }
-        
-        const defaultDilution = dilutionFactors[index] || 3; 
+
+        const defaultDilution = dilutionFactors[index] || 3;
         const currentDilution = customDilutions[std.id] !== undefined ? customDilutions[std.id] : defaultDilution;
         const theoreticalC = matchedUsedC / currentDilution;
         const isEnabled = enabledStds[std.id] !== undefined ? enabledStds[std.id] : (index < dilutionFactors.length);
-        
+
         if (isEnabled) {
           activePoints.push({ x: theoreticalC, y: std.avArea });
         }
-        
+
         return {
           id: std.id,
           index,
@@ -514,9 +615,9 @@ export default function App() {
           group: std
         };
       });
-      
+
       const fit = fitCalibrationCurve(activePoints);
-      
+
       return {
         ...curve,
         standards: detailedStandards,
@@ -555,9 +656,9 @@ export default function App() {
   const sampleToCurveMap = useMemo(() => {
     const map: Record<string, string> = {};
     if (calibrationCurves.length === 0) return map;
-    
+
     let lastCurveId = calibrationCurves[0].id;
-    
+
     sampleGroups.forEach((g) => {
       const matchingCurve = calibrationCurves.find(c => c.standards.some(s => s.id === g.id));
       if (matchingCurve) {
@@ -565,7 +666,7 @@ export default function App() {
       }
       map[g.id] = lastCurveId;
     });
-    
+
     return map;
   }, [sampleGroups, calibrationCurves]);
 
@@ -578,17 +679,17 @@ export default function App() {
       const isRejected = rejectedSamples[g.id] !== undefined ? rejectedSamples[g.id] : defaultRejected;
       const curveId = sampleToCurveMap[g.id];
       const curve = calibrationCurves.find(c => c.id === curveId) || calibrationCurves[0];
-      
+
       const slope = curve?.slope || 1;
       const intercept = curve?.intercept || 0;
-      
+
       const concentration = (g.avArea - intercept) / slope;
       const error = g.sdArea / slope;
-      
+
       // Match station coordinates
       const normStation = normalizeStationName(g.station);
       const coordMatch = stationCoords.find(c => normalizeStationName(c.station) === normStation);
-      
+
       return {
         ...g,
         concentration,
@@ -606,7 +707,7 @@ export default function App() {
   // Sort processed samples for list rendering & export
   const sortedProcessedSamples = useMemo(() => {
     const listWithIndex = processedSamples.map((s, idx) => ({ s, idx }));
-    
+
     listWithIndex.sort((a, b) => {
       if (sampleSortOrder === 'category') {
         const getWeight = (item: typeof a.s) => {
@@ -633,7 +734,7 @@ export default function App() {
       // 'import' order
       return a.idx - b.idx;
     });
-    
+
     return listWithIndex.map(x => x.s);
   }, [processedSamples, sampleSortOrder]);
 
@@ -641,16 +742,16 @@ export default function App() {
   const blanksAndSeawaters = useMemo(() => {
     const blanks = processedSamples.filter(s => s.isBlank);
     const seawaters = processedSamples.filter(s => s.isSeawater);
-    
+
     const avgBlankArea = calculateMean(blanks.map(b => b.avArea));
     const avgBlankConc = calculateMean(blanks.map(b => b.concentration));
-    
+
     const dsws = seawaters.filter(s => s.sampleName.toLowerCase() === 'dsw');
     const ssws = seawaters.filter(s => s.sampleName.toLowerCase() === 'ssw');
-    
+
     const avgDswConc = calculateMean(dsws.map(d => d.concentration));
     const avgSswConc = calculateMean(ssws.map(s => s.concentration));
-    
+
     return {
       avgBlankArea,
       avgBlankConc,
@@ -674,6 +775,31 @@ export default function App() {
     });
     return stations;
   }, [processedSamples]);
+
+  const [qcSelectedStation, setQcSelectedStation] = useState<string>('all');
+
+  const qcStations = useMemo(() => {
+    const list: string[] = [];
+    const hasBlank = processedSamples.some(s => s.isBlank);
+    const hasStd = processedSamples.some(s => s.isStd);
+    const seawaters = Array.from(new Set(processedSamples.filter(s => s.isSeawater).map(s => s.sampleName.toUpperCase())));
+    
+    if (hasBlank) list.push("MQ/空白");
+    seawaters.forEach(sw => list.push(sw));
+    if (hasStd) list.push("STANDARD");
+    
+    return [...list, ...stationsList];
+  }, [processedSamples, stationsList]);
+
+  const filteredQcSamples = useMemo(() => {
+    if (qcSelectedStation === 'all') return sortedProcessedSamples;
+    return sortedProcessedSamples.filter(s => {
+      if (qcSelectedStation === 'MQ/空白') return s.isBlank;
+      if (qcSelectedStation === 'STANDARD') return s.isStd;
+      if (s.isSeawater && s.sampleName.toUpperCase() === qcSelectedStation) return true;
+      return s.station === qcSelectedStation;
+    });
+  }, [sortedProcessedSamples, qcSelectedStation]);
 
   const dataBounds = useMemo(() => {
     const valid = processedSamples.filter(s => s.station !== null && s.depth !== null && !s.isRejected);
@@ -727,7 +853,7 @@ export default function App() {
   // 1D Chart Data
   const chart1dData = useMemo(() => {
     if (!selectedStation) return [];
-    
+
     return processedSamples
       .filter(s => s.station === selectedStation && s.depth !== null && !s.isRejected)
       .map(s => ({
@@ -743,7 +869,7 @@ export default function App() {
   // Excel template export generator
   const exportToExcel = () => {
     const wb = xlsx.utils.book_new();
-    
+
     // 1. Final Data Sheet
     const finalDataRows: any[][] = [
       ["DOC 分析报告"],
@@ -791,7 +917,7 @@ export default function App() {
 
     const wsFinal = xlsx.utils.aoa_to_sheet(finalDataRows);
     xlsx.utils.book_append_sheet(wb, wsFinal, "DOC_Final_Data");
-    
+
     // 2. Raw Injections Sheet
     const rawInjectionsRows: (string | number)[][] = [
       ["文件名", "样品名称", "样品ID", "注射次数", "分析类型", "峰面积"]
@@ -819,20 +945,40 @@ export default function App() {
     setExcludedInjections(prev => {
       const group = sampleGroups.find(g => g.id === groupId);
       if (!group) return prev;
-      
+
       const current = prev[groupId] || group.injections.map(() => false);
       const updated = [...current];
       updated[injIndex] = !updated[injIndex];
-      
+
       if (updated.filter(v => !v).length === 0) {
         return prev;
       }
-      
+
       return {
         ...prev,
         [groupId]: updated
       };
     });
+  };
+
+  const handleUpdateInjectionArea = (
+    fileName: string,
+    sampleName: string,
+    sampleId: string,
+    injNo: number,
+    newArea: number
+  ) => {
+    setRawInjections(prev => prev.map(inj => {
+      if (
+        inj.fileName === fileName &&
+        inj.sampleName === sampleName &&
+        inj.sampleId === sampleId &&
+        inj.injNo === injNo
+      ) {
+        return { ...inj, area: newArea };
+      }
+      return inj;
+    }));
   };
 
   // Toggle sample rejection
@@ -850,21 +996,21 @@ export default function App() {
     if (!container) return;
     const svg = container.querySelector('svg');
     if (!svg) return;
-    
+
     const scale = 3; // 3x high-definition scale
     const svgWidth = svg.clientWidth || svg.width.baseVal.value || 500;
     const svgHeight = svg.clientHeight || svg.height.baseVal.value || 400;
-    
+
     const combinedCanvas = document.createElement('canvas');
     combinedCanvas.width = svgWidth * scale;
     combinedCanvas.height = svgHeight * scale;
     const ctx = combinedCanvas.getContext('2d');
     if (!ctx) return;
-    
+
     ctx.scale(scale, scale);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, svgWidth, svgHeight);
-    
+
     // Clone SVG and set explicit viewBox and dimensions
     const clone = svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute('width', svgWidth.toString());
@@ -872,16 +1018,16 @@ export default function App() {
     if (!clone.getAttribute('viewBox')) {
       clone.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
     }
-    
+
     const svgString = new XMLSerializer().serializeToString(clone);
     const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(svgBlob);
-    
+
     const img = new Image();
     img.onload = () => {
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
-      
+
       const link = document.createElement('a');
       link.download = `${selectedStation || 'ST'}_1D_Profile.png`;
       link.href = combinedCanvas.toDataURL('image/png');
@@ -893,22 +1039,22 @@ export default function App() {
   const download2DPlot = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    
+
     const svg = canvas.nextElementSibling as SVGSVGElement | null;
     if (!svg) return;
-    
+
     const scale = 3; // 3x high-definition scale
     const combinedCanvas = document.createElement('canvas');
     combinedCanvas.width = 620 * scale;
     combinedCanvas.height = 450 * scale;
     const ctx = combinedCanvas.getContext('2d');
     if (!ctx) return;
-    
+
     ctx.scale(scale, scale);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, 620, 450);
     ctx.drawImage(canvas, 50, 30, 500, 380);
-    
+
     // Clone SVG and set explicit viewBox and dimensions
     const clone = svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute('width', '620');
@@ -916,16 +1062,16 @@ export default function App() {
     if (!clone.getAttribute('viewBox')) {
       clone.setAttribute('viewBox', '0 0 620 450');
     }
-    
+
     const svgString = new XMLSerializer().serializeToString(clone);
     const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(svgBlob);
-    
+
     const img = new Image();
     img.onload = () => {
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
-      
+
       const link = document.createElement('a');
       link.download = `${selectedStation || 'DOC'}_2D_Contour.png`;
       link.href = combinedCanvas.toDataURL('image/png');
@@ -937,7 +1083,7 @@ export default function App() {
   // 2D Contour Plot Calculations & Drawing
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [contourSvgPaths, setContourSvgPaths] = useState<{ path: string; value: number }[]>([]);
-  const [interpolatedPoints, setInterpolatedPoints] = useState<{x: number, y: number, name: string}[]>([]);
+  const [interpolatedPoints, setInterpolatedPoints] = useState<{ x: number, y: number, name: string }[]>([]);
   const [contourDataPoints, setContourDataPoints] = useState<{ cx: number; cy: number; conc: number }[]>([]);
   const [topStationTicks, setTopStationTicks] = useState<{ name: string; cx: number }[]>([]);
   const [bathyPath, setBathyPath] = useState<string>('');
@@ -945,7 +1091,7 @@ export default function App() {
   // Redraw contour plot on dependency changes
   useEffect(() => {
     if (currentStep !== 4 || visSubTab !== 'contour2d' || !canvasRef.current) return;
-    
+
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -999,17 +1145,18 @@ export default function App() {
     }
 
     // Get min/max boundaries of the active section
-    const minX = minXFilter;
-    const maxX = maxXFilter;
+    const sampleXValues = filteredSamples.map(s => getXValue(s));
+    const minX = sampleXValues.length > 0 ? Math.min(...sampleXValues) : minXFilter;
+    const maxX = sampleXValues.length > 0 ? Math.max(...sampleXValues) : maxXFilter;
     const minY = minDepthFilter;
     const maxY = maxDepthFilter;
     const xSpan = maxX - minX || 1;
     const ySpan = maxY - minY || 1;
 
-    // Map samples to coordinate systems for interpolation (normalized to [0, 1])
+    // Map samples to coordinate systems for interpolation (normalized to [0, 1] with anisotropy)
     const dataPoints = filteredSamples.map(s => ({
       x: (getXValue(s) - minX) / xSpan,
-      y: (s.depth! - minY) / ySpan,
+      y: ((s.depth! - minY) / ySpan) * anisotropyFactor,
       z: s.concentration
     }));
 
@@ -1020,7 +1167,7 @@ export default function App() {
 
     // Compute grid values using Inverse Distance Weighting (IDW)
     for (let r = 0; r < gridHeight; r++) {
-      const gridYNorm = r / (gridHeight - 1);
+      const gridYNorm = (r / (gridHeight - 1)) * anisotropyFactor;
       for (let c = 0; c < gridWidth; c++) {
         const gridXNorm = c / (gridWidth - 1);
         gridValues[r * gridWidth + c] = interpolateIDW(dataPoints, gridXNorm, gridYNorm, idwPower);
@@ -1035,7 +1182,7 @@ export default function App() {
     const imgData = ctx.createImageData(canvasWidth, canvasHeight);
     const colorScale = scaleLinear<string>()
       .domain([docMin, docMin + (docMax - docMin) * 0.25, docMin + (docMax - docMin) * 0.5, docMin + (docMax - docMin) * 0.75, docMax])
-      .range(['#1e3a8a', '#0284c7', '#10b981', '#f59e0b', '#ef4444']) 
+      .range(['#1e3a8a', '#0284c7', '#10b981', '#f59e0b', '#ef4444'])
       .clamp(true);
 
     for (let cy = 0; cy < canvasHeight; cy++) {
@@ -1044,26 +1191,26 @@ export default function App() {
       const y0 = Math.floor(gy);
       const y1 = Math.min(y0 + 1, gridHeight - 1);
       const ty = gy - y0;
-      
+
       for (let cx = 0; cx < canvasWidth; cx++) {
         const gridXRatio = cx / (canvasWidth - 1);
         const gx = gridXRatio * (gridWidth - 1);
         const x0 = Math.floor(gx);
         const x1 = Math.min(x0 + 1, gridWidth - 1);
         const tx = gx - x0;
-        
+
         const v00 = gridValues[y0 * gridWidth + x0];
         const v10 = gridValues[y0 * gridWidth + x1];
         const v01 = gridValues[y1 * gridWidth + x0];
         const v11 = gridValues[y1 * gridWidth + x1];
-        
+
         // Bilinear interpolation for ultra-smooth rendering
-        const val = v00 * (1 - tx) * (1 - ty) + 
-                    v10 * tx * (1 - ty) + 
-                    v01 * (1 - tx) * ty + 
-                    v11 * tx * ty;
+        const val = v00 * (1 - tx) * (1 - ty) +
+          v10 * tx * (1 - ty) +
+          v01 * (1 - tx) * ty +
+          v11 * tx * ty;
         const hexColor = colorScale(val);
-        
+
         let rVal = 0, gVal = 0, bVal = 0;
         if (hexColor.startsWith('#')) {
           rVal = parseInt(hexColor.slice(1, 3), 16);
@@ -1077,12 +1224,12 @@ export default function App() {
             bVal = parseInt(match[3], 10);
           }
         }
-        
+
         const pixelIdx = (cy * canvasWidth + cx) * 4;
         imgData.data[pixelIdx] = rVal;
         imgData.data[pixelIdx + 1] = gVal;
         imgData.data[pixelIdx + 2] = bVal;
-        imgData.data[pixelIdx + 3] = 230; 
+        imgData.data[pixelIdx + 3] = 230;
       }
     }
     ctx.putImageData(imgData, 0, 0);
@@ -1166,7 +1313,7 @@ export default function App() {
       // Try to find bottom depth from stationCoords, fallback to maximum sample depth
       const normSt = normalizeStationName(st);
       const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
-      const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth 
+      const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
         || Math.max(...stSamples.map(s => s.depth || 0), 100);
 
       let xVal = 0;
@@ -1186,13 +1333,15 @@ export default function App() {
 
     let pathStr = "";
     if (bathyPoints.length > 0) {
-      pathStr = `M0,${canvasHeight}`;
-      pathStr += ` L0,${Math.max(0, Math.min(canvasHeight, bathyPoints[0].cy))}`;
+      const firstPt = bathyPoints[0];
+      const lastPt = bathyPoints[bathyPoints.length - 1];
+
+      pathStr = `M${firstPt.cx},${canvasHeight + 100}`;
+      pathStr += ` L${firstPt.cx},${firstPt.cy}`;
       bathyPoints.forEach(pt => {
-        pathStr += ` L${Math.max(0, Math.min(canvasWidth, pt.cx))},${Math.max(0, Math.min(canvasHeight, pt.cy))}`;
+        pathStr += ` L${pt.cx},${pt.cy}`;
       });
-      pathStr += ` L${canvasWidth},${Math.max(0, Math.min(canvasHeight, bathyPoints[bathyPoints.length - 1].cy))}`;
-      pathStr += ` L${canvasWidth},${canvasHeight} Z`;
+      pathStr += ` L${lastPt.cx},${canvasHeight + 100} Z`;
     }
     setBathyPath(pathStr);
 
@@ -1211,7 +1360,7 @@ export default function App() {
       return { name: st || '', cx };
     });
     setTopStationTicks(ticks);
-  }, [currentStep, visSubTab, processedSamples, docMin, docMax, contourStep, idwPower, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter]);
+  }, [currentStep, visSubTab, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter]);
 
   // Stepper helper info
   const stepLabelMap = [
@@ -1224,24 +1373,24 @@ export default function App() {
 
   return (
     <div className="wizard-container">
-      
+
       {/* Wizard Header with Stepper Progress */}
       <div className="wizard-header">
         <div className="stepper">
           {/* Stepper background line progress */}
-          <div 
+          <div
             className="stepper-progress"
             style={{ width: `${((currentStep - 1) / (stepLabelMap.length - 1)) * 100 - 8}%` }}
           ></div>
-          
+
           {stepLabelMap.map((label, idx) => {
             const stepNum = idx + 1;
             const isActive = currentStep === stepNum;
             const isCompleted = currentStep > stepNum;
-            
+
             return (
-              <div 
-                key={idx} 
+              <div
+                key={idx}
                 className={`step-node ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''}`}
                 onClick={() => {
                   // Only allow navigation to steps already unlocked
@@ -1264,7 +1413,7 @@ export default function App() {
 
       {/* Active Step Panel */}
       <div className="wizard-content">
-        
+
         {/* Step 1: Upload */}
         {currentStep === 1 && (
           <div>
@@ -1279,7 +1428,7 @@ export default function App() {
               {/* Dropzone 1: Raw Data TXT */}
               <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column' }}>
                 <h3 className="font-semibold text-base text-slate-700" style={{ margin: '0 0 12px 0' }}>1. 仪器分析原始数据 (TXT)</h3>
-                <div 
+                <div
                   className={`dropzone ${isDragActiveRaw ? 'drag-active' : ''}`}
                   onDragEnter={handleDragRaw}
                   onDragOver={handleDragRaw}
@@ -1288,11 +1437,11 @@ export default function App() {
                   onClick={() => rawFileInputRef.current?.click()}
                   style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: '160px' }}
                 >
-                  <input 
-                    type="file" 
+                  <input
+                    type="file"
                     ref={rawFileInputRef}
                     style={{ display: 'none' }}
-                    multiple 
+                    multiple
                     accept=".txt"
                     onChange={handleFileChangeRaw}
                   />
@@ -1307,7 +1456,7 @@ export default function App() {
               {/* Dropzone 2: Station Coordinates Excel/CSV */}
               <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column' }}>
                 <h3 className="font-semibold text-base text-slate-700" style={{ margin: '0 0 12px 0' }}>2. 样品经纬度清单 (Excel/CSV)</h3>
-                <div 
+                <div
                   className={`dropzone ${isDragActiveCoord ? 'drag-active' : ''}`}
                   onDragEnter={handleDragCoord}
                   onDragOver={handleDragCoord}
@@ -1316,11 +1465,11 @@ export default function App() {
                   onClick={() => coordFileInputRef.current?.click()}
                   style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', minHeight: '160px' }}
                 >
-                  <input 
-                    type="file" 
+                  <input
+                    type="file"
                     ref={coordFileInputRef}
                     style={{ display: 'none' }}
-                    multiple 
+                    multiple
                     accept=".csv,.xlsx,.xls"
                     onChange={handleFileChangeCoord}
                   />
@@ -1337,8 +1486,8 @@ export default function App() {
               <div className="card" style={{ marginBottom: '24px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <h4 className="font-semibold text-sm" style={{ margin: 0 }}>已导入的文件 ({files.length})</h4>
-                  <button 
-                    className="btn btn-secondary" 
+                  <button
+                    className="btn btn-secondary"
                     style={{ padding: '6px 12px', fontSize: '12px', color: '#ef4444', borderColor: '#fee2e2', display: 'flex', alignItems: 'center', gap: '4px' }}
                     onClick={clearAllData}
                   >
@@ -1349,7 +1498,8 @@ export default function App() {
                 <div className="file-list">
                   {files.map((file, i) => {
                     const isCoordinateFile = file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv');
-                    const uniqueStsCount = isCoordinateFile ? new Set(stationCoords.map(c => c.station)).size : 0;
+                    const fileCoords = stationCoords.filter(c => (c as any).fileName === file.name);
+                    const uniqueStsCount = isCoordinateFile ? new Set(fileCoords.map(c => c.station)).size : 0;
                     return (
                       <div className="file-item" key={i}>
                         <div className="file-info">
@@ -1357,12 +1507,40 @@ export default function App() {
                           <span>{file.name}</span>
                           <span className="text-xs text-slate-400">({(file.size / 1024).toFixed(1)} KB)</span>
                         </div>
-                        <span className={`badge ${isCoordinateFile ? 'badge-success' : 'badge-info'}`}>
-                          {isCoordinateFile 
-                            ? `已解析 ${uniqueStsCount} 个站位 (${stationCoords.length} 行样品经纬度)` 
-                            : `已解析 ${rawInjections.filter(inj => inj.fileName === file.name).length} 行数据`
-                          }
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <span className={`badge ${isCoordinateFile ? 'badge-success' : 'badge-info'}`}>
+                            {isCoordinateFile
+                              ? `已解析 ${uniqueStsCount} 个站位 (${fileCoords.length} 行样品经纬度)`
+                              : `已解析 ${rawInjections.filter(inj => inj.fileName === file.name).length} 行数据`
+                            }
+                          </span>
+                          <button
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: 'var(--text-muted)',
+                              cursor: 'pointer',
+                              padding: '4px',
+                              borderRadius: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.15s ease',
+                            }}
+                            onClick={() => removeFile(file.name)}
+                            title="删除此文件"
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.color = 'var(--danger)';
+                              e.currentTarget.style.backgroundColor = 'var(--danger-light)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.color = 'var(--text-muted)';
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1380,36 +1558,36 @@ export default function App() {
                   <div className="grid-3" style={{ gap: '12px' }}>
                     <div className="input-group" style={{ marginBottom: 0 }}>
                       <label className="input-label">标准储备液浓度 (µmol C / L)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         className="input-field"
-                        value={stdStockC} 
+                        value={stdStockC}
                         onChange={e => handleStdStockCChange(parseFloat(e.target.value) || 0)}
                         step="any"
                       />
                     </div>
                     <div className="input-group" style={{ marginBottom: 0 }}>
                       <label className="input-label">配置稀释倍数 (转为使用浓度)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         className="input-field"
-                        value={stdDilutionFactor} 
+                        value={stdDilutionFactor}
                         onChange={e => handleStdDilutionFactorChange(parseFloat(e.target.value) || 0)}
                         step="any"
                       />
                     </div>
                     <div className="input-group" style={{ marginBottom: 0 }}>
                       <label className="input-label">使用浓度 (µmol C / L)</label>
-                      <input 
-                        type="number" 
+                      <input
+                        type="number"
                         className="input-field font-semibold text-sky-600 bg-sky-50/10"
-                        value={stdUsedC} 
+                        value={stdUsedC}
                         onChange={e => handleStdUsedCChange(parseFloat(e.target.value) || 0)}
                         step="any"
                       />
                     </div>
                   </div>
-                  
+
                   <p className="text-xs text-slate-400" style={{ margin: 0 }}>
                     ※ <strong>计算说明：</strong><code>使用浓度 = 储备液浓度 / 配置稀释倍数</code>。系统会自动在上述三者间进行联动计算。
                   </p>
@@ -1428,11 +1606,11 @@ export default function App() {
                             </span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
                               <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>稀释倍数:</span>
-                              <input 
-                                type="number" 
+                              <input
+                                type="number"
                                 className="input-field"
                                 style={{ padding: '4px 8px', fontSize: '13px', flex: 1, minWidth: 0 }}
-                                value={factor} 
+                                value={factor}
                                 onChange={e => {
                                   const val = parseFloat(e.target.value) || 0;
                                   const newFactors = [...dilutionFactors];
@@ -1458,10 +1636,10 @@ export default function App() {
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <div className="input-group" style={{ marginBottom: 0, width: '220px' }}>
                         <label className="input-label" style={{ fontSize: '12px', fontWeight: 600 }}>扎空判定面积阈值 (Area)</label>
-                        <input 
-                          type="number" 
+                        <input
+                          type="number"
                           className="input-field"
-                          value={emptyInjectionThreshold} 
+                          value={emptyInjectionThreshold}
                           onChange={e => setEmptyInjectionThreshold(parseFloat(e.target.value) || 0)}
                           step="0.05"
                         />
@@ -1481,8 +1659,8 @@ export default function App() {
                     {rawInjections.length > 0 ? "数据就绪" : "待上传数据"}
                   </h3>
                   <p className="text-sm text-slate-500" style={{ maxWidth: '300px', margin: '0 auto' }}>
-                    {rawInjections.length > 0 
-                      ? `已成功加载了 ${processedSamples.length} 个独立样品的测量数据，点击下一步进行拟合曲线校验。` 
+                    {rawInjections.length > 0
+                      ? `已成功加载了 ${processedSamples.length} 个独立样品的测量数据，点击下一步进行拟合曲线校验。`
                       : "请在上方上传仪器输出的 txt 数据。系统支持自动识别各种编码。"}
                   </p>
                 </div>
@@ -1500,7 +1678,7 @@ export default function App() {
                 <p className="page-subtitle">第二步：拟合线性回归工作曲线，勾选排除偏离严重的异常梯度点</p>
               </div>
             </div>
-            
+
             {calibrationCurves.length > 1 && (
               <div className="card mb-4" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', flexDirection: 'row' }}>
                 <span className="text-sm font-bold text-slate-700">检测到多条工作曲线，请选择要查看/配置的曲线：</span>
@@ -1522,7 +1700,7 @@ export default function App() {
             <div className="grid-1-2">
               <div className="card" style={{ padding: '20px' }}>
                 <h3 className="card-title" style={{ fontSize: '16px' }}>拟合回归参数</h3>
-                
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '10px' }}>
                   <div>
                     <span className="text-xs text-slate-400 block font-semibold">拟合斜率 (Slope / m)</span>
@@ -1558,32 +1736,32 @@ export default function App() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                      <XAxis 
-                        type="number" 
-                        dataKey="theoreticalC" 
-                        name="理论浓度" 
-                        unit=" µmol/L" 
-                        stroke="#94a3b8" 
+                      <XAxis
+                        type="number"
+                        dataKey="theoreticalC"
+                        name="理论浓度"
+                        unit=" µmol/L"
+                        stroke="#94a3b8"
                         fontSize={12}
                       />
-                      <YAxis 
-                        type="number" 
-                        dataKey="avArea" 
-                        name="平均面积" 
-                        stroke="#94a3b8" 
+                      <YAxis
+                        type="number"
+                        dataKey="avArea"
+                        name="平均面积"
+                        stroke="#94a3b8"
                         fontSize={12}
                       />
                       <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                       <Legend />
-                      <Scatter 
-                        name="有效标准点" 
-                        data={standardsData.filter(s => s.enabled)} 
-                        fill="#0284c7" 
+                      <Scatter
+                        name="有效标准点"
+                        data={standardsData.filter(s => s.enabled)}
+                        fill="#0284c7"
                       />
-                      <Scatter 
-                        name="已排除标准点" 
-                        data={standardsData.filter(s => !s.enabled)} 
-                        fill="#ef4444" 
+                      <Scatter
+                        name="已排除标准点"
+                        data={standardsData.filter(s => !s.enabled)}
+                        fill="#ef4444"
                         shape="cross"
                       />
                     </ScatterChart>
@@ -1611,8 +1789,8 @@ export default function App() {
                     {standardsData.map((std) => (
                       <tr key={std.id} className={!std.enabled ? 'tr-danger opacity-60' : ''}>
                         <td>
-                          <input 
-                            type="checkbox" 
+                          <input
+                            type="checkbox"
                             checked={std.enabled}
                             onChange={() => setEnabledStds(prev => ({
                               ...prev,
@@ -1623,19 +1801,58 @@ export default function App() {
                         </td>
                         <td className="font-semibold">{std.sampleName}</td>
                         <td>
-                          <div style={{ display: 'flex', gap: '8px' }}>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                             {std.group.injections.map((area: number, i: number) => {
-                              const isEmpty = area < emptyInjectionThreshold;
+                              const injNo = i + 1;
                               return (
-                                <span 
-                                  key={i} 
-                                  className={`badge ${std.group.selectedInjections[i] ? 'badge-info' : isEmpty ? 'badge-danger' : 'cell-excluded badge-secondary'}`}
-                                  onClick={() => handleToggleInjection(std.id, i)}
-                                  style={{ cursor: 'pointer' }}
-                                  title={isEmpty ? "检测到疑似扎空（已自动排除）" : "点击手动强制包含/排除本次注射"}
+                                <div 
+                                  key={i}
+                                  style={{ 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    gap: '4px',
+                                    padding: '2px 6px',
+                                    borderRadius: '6px',
+                                    backgroundColor: std.group.selectedInjections[i] ? 'var(--primary-light)' : '#f1f5f9',
+                                    border: `1px solid ${std.group.selectedInjections[i] ? 'var(--primary)' : '#cbd5e1'}`,
+                                    transition: 'all 0.15s ease'
+                                  }}
                                 >
-                                  {area.toFixed(4)}{isEmpty ? " (空)" : ""}
-                                </span>
+                                  <span
+                                    onClick={() => handleToggleInjection(std.id, i)}
+                                    style={{ 
+                                      cursor: 'pointer', 
+                                      width: '8px', 
+                                      height: '8px', 
+                                      borderRadius: '50%', 
+                                      backgroundColor: std.group.selectedInjections[i] ? 'var(--primary)' : '#94a3b8',
+                                      display: 'inline-block' 
+                                    }}
+                                    title={std.group.selectedInjections[i] ? "点击排除本次注射" : "点击包含本次注射"}
+                                  />
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={area}
+                                    onChange={(e) => {
+                                      const val = parseFloat(e.target.value) || 0;
+                                      handleUpdateInjectionArea(std.group.fileName, std.group.sampleName, std.group.sampleId, injNo, val);
+                                    }}
+                                    style={{
+                                      width: '62px',
+                                      border: 'none',
+                                      background: 'transparent',
+                                      fontSize: '12px',
+                                      fontWeight: '600',
+                                      color: std.group.selectedInjections[i] ? 'var(--text-primary)' : 'var(--text-muted)',
+                                      textDecoration: std.group.selectedInjections[i] ? 'none' : 'line-through',
+                                      textAlign: 'center',
+                                      outline: 'none',
+                                      padding: 0
+                                    }}
+                                    title="直接输入修改数值"
+                                  />
+                                </div>
                               );
                             })}
                           </div>
@@ -1643,8 +1860,8 @@ export default function App() {
                         <td>{std.avArea.toFixed(4)}</td>
                         <td>{std.group.sdArea.toFixed(4)}</td>
                         <td>
-                          <input 
-                            type="number" 
+                          <input
+                            type="number"
                             value={std.dilution}
                             onChange={e => {
                               const val = parseFloat(e.target.value);
@@ -1660,7 +1877,7 @@ export default function App() {
                                 }));
                               }
                             }}
-                            className="input-field py-1 px-2 text-xs" 
+                            className="input-field py-1 px-2 text-xs"
                             style={{ width: '70px' }}
                             step="any"
                           />
@@ -1700,11 +1917,10 @@ export default function App() {
                   <span>深海参标 (DSW) 平均浓度</span>
                   <span className="text-[10px] text-slate-400 font-normal">(历史值 41-45 µmol/L)</span>
                 </span>
-                <span className={`text-2xl font-bold font-display ${
-                  blanksAndSeawaters.avgDswConc >= 41 && blanksAndSeawaters.avgDswConc <= 45
-                    ? "text-emerald-500" 
+                <span className={`text-2xl font-bold font-display ${blanksAndSeawaters.avgDswConc >= 41 && blanksAndSeawaters.avgDswConc <= 45
+                    ? "text-emerald-500"
                     : "text-amber-500"
-                }`}>
+                  }`}>
                   {blanksAndSeawaters.avgDswConc ? `${blanksAndSeawaters.avgDswConc.toFixed(2)} µmol/L` : "N/A"}
                 </span>
                 <span className="text-xs text-slate-400 block mt-1">
@@ -1716,11 +1932,10 @@ export default function App() {
                   <span>表层参标 (SSW) 平均浓度</span>
                   <span className="text-[10px] text-slate-400 font-normal">(历史值 70-80 µmol/L)</span>
                 </span>
-                <span className={`text-2xl font-bold font-display ${
-                  blanksAndSeawaters.avgSswConc >= 70 && blanksAndSeawaters.avgSswConc <= 80
-                    ? "text-emerald-500" 
+                <span className={`text-2xl font-bold font-display ${blanksAndSeawaters.avgSswConc >= 70 && blanksAndSeawaters.avgSswConc <= 80
+                    ? "text-emerald-500"
                     : "text-amber-500"
-                }`}>
+                  }`}>
                   {blanksAndSeawaters.avgSswConc ? `${blanksAndSeawaters.avgSswConc.toFixed(2)} µmol/L` : "N/A"}
                 </span>
                 <span className="text-xs text-slate-400 block mt-1">
@@ -1732,29 +1947,66 @@ export default function App() {
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                 <h3 className="card-title" style={{ margin: 0 }}>样品浓度数据列表</h3>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="text-sm font-semibold text-slate-500">数据排序：</span>
-                  <select 
-                    value={sampleSortOrder} 
-                    onChange={(e) => setSampleSortOrder(e.target.value as any)}
-                    style={{ 
-                      padding: '6px 12px', 
-                      borderRadius: '6px', 
-                      border: '1px solid #cbd5e1', 
-                      fontSize: '14px', 
-                      color: '#334155',
-                      outline: 'none',
-                      cursor: 'pointer',
-                      backgroundColor: '#fff',
-                      fontWeight: '500',
-                      boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
-                    }}
-                  >
-                    <option value="category">按样品类别 (MQ/空白 ➔ 参标 ➔ 样品)</option>
-                    <option value="import">按导入顺序</option>
-                    <option value="name">按样品名称</option>
-                    <option value="concentration">按浓度从高到低</option>
-                  </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="text-sm font-semibold text-slate-500">站位筛选：</span>
+                    <select
+                      value={qcSelectedStation}
+                      onChange={(e) => setQcSelectedStation(e.target.value)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '14px',
+                        color: '#334155',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        backgroundColor: '#fff',
+                        fontWeight: '500',
+                        boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+                      }}
+                    >
+                      <option value="all">全部站位 ({processedSamples.length})</option>
+                      {qcStations.map(st => {
+                        const count = processedSamples.filter(s => {
+                          if (st === 'MQ/空白') return s.isBlank;
+                          if (st === 'STANDARD') return s.isStd;
+                          if (st === 'DSW' || st === 'SSW') return s.isSeawater && s.sampleName.toUpperCase() === st;
+                          return s.station === st;
+                        }).length;
+                        return (
+                          <option key={st} value={st}>
+                            {st} ({count} 个样品)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="text-sm font-semibold text-slate-500">数据排序：</span>
+                    <select
+                      value={sampleSortOrder}
+                      onChange={(e) => setSampleSortOrder(e.target.value as any)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '14px',
+                        color: '#334155',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        backgroundColor: '#fff',
+                        fontWeight: '500',
+                        boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+                      }}
+                    >
+                      <option value="category">按样品类别 (MQ/空白 ➔ 参标 ➔ 样品)</option>
+                      <option value="import">按导入顺序</option>
+                      <option value="name">按样品名称</option>
+                      <option value="concentration">按浓度从高到低</option>
+                    </select>
+                  </div>
                 </div>
               </div>
               <div className="table-container">
@@ -1766,7 +2018,7 @@ export default function App() {
                       <th>站位</th>
                       <th>深度 (m)</th>
                       <th>使用工作曲线</th>
-                      <th>每次注射面积 (点击剔除)</th>
+                      <th>每次注射面积 (点击圆点包含/排除)</th>
                       <th>平均面积</th>
                       <th>面积SD</th>
                       <th>面积RSD (%)</th>
@@ -1775,17 +2027,17 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedProcessedSamples.map((s) => {
+                    {filteredQcSamples.map((s) => {
                       const isRsdHigh = s.rsd > 2.0;
                       let trClass = "";
                       if (s.isRejected) trClass = "tr-danger opacity-50";
                       else if (isRsdHigh) trClass = "tr-warning";
-                      
+
                       return (
                         <tr key={s.id} className={trClass}>
                           <td>
-                            <input 
-                              type="checkbox" 
+                            <input
+                              type="checkbox"
                               checked={!s.isRejected}
                               onChange={() => handleToggleRejection(s.id)}
                               style={{ cursor: 'pointer' }}
@@ -1796,19 +2048,58 @@ export default function App() {
                           <td>{s.depth !== null ? `${s.depth} m` : "-"}</td>
                           <td style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>{s.curveName}</td>
                           <td>
-                            <div style={{ display: 'flex', gap: '6px' }}>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                               {s.injections.map((area, i) => {
-                                const isEmpty = area < emptyInjectionThreshold;
+                                const injNo = i + 1;
                                 return (
-                                  <span 
-                                    key={i} 
-                                    className={`badge ${s.selectedInjections[i] ? 'badge-info' : isEmpty ? 'badge-danger' : 'cell-excluded badge-secondary'}`}
-                                    onClick={() => handleToggleInjection(s.id, i)}
-                                    style={{ cursor: 'pointer' }}
-                                    title={isEmpty ? "检测到疑似扎空（已自动排除）" : "点击包含/排除单次测量"}
+                                  <div 
+                                    key={i}
+                                    style={{ 
+                                      display: 'flex', 
+                                      alignItems: 'center', 
+                                      gap: '4px',
+                                      padding: '2px 6px',
+                                      borderRadius: '6px',
+                                      backgroundColor: s.selectedInjections[i] ? 'var(--primary-light)' : '#f1f5f9',
+                                      border: `1px solid ${s.selectedInjections[i] ? 'var(--primary)' : '#cbd5e1'}`,
+                                      transition: 'all 0.15s ease'
+                                    }}
                                   >
-                                    {area.toFixed(4)}{isEmpty ? " (空)" : ""}
-                                  </span>
+                                    <span
+                                      onClick={() => handleToggleInjection(s.id, i)}
+                                      style={{ 
+                                        cursor: 'pointer', 
+                                        width: '8px', 
+                                        height: '8px', 
+                                        borderRadius: '50%', 
+                                        backgroundColor: s.selectedInjections[i] ? 'var(--primary)' : '#94a3b8',
+                                        display: 'inline-block' 
+                                      }}
+                                      title={s.selectedInjections[i] ? "点击排除本次注射" : "点击包含本次注射"}
+                                    />
+                                    <input
+                                      type="number"
+                                      step="any"
+                                      value={area}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value) || 0;
+                                        handleUpdateInjectionArea(s.fileName, s.sampleName, s.sampleId, injNo, val);
+                                      }}
+                                      style={{
+                                        width: '62px',
+                                        border: 'none',
+                                        background: 'transparent',
+                                        fontSize: '12px',
+                                        fontWeight: '600',
+                                        color: s.selectedInjections[i] ? 'var(--text-primary)' : 'var(--text-muted)',
+                                        textDecoration: s.selectedInjections[i] ? 'none' : 'line-through',
+                                        textAlign: 'center',
+                                        outline: 'none',
+                                        padding: 0
+                                      }}
+                                      title="直接输入修改数值"
+                                    />
+                                  </div>
                                 );
                               })}
                             </div>
@@ -1847,14 +2138,14 @@ export default function App() {
 
             {/* Sub-tab selection for 1D vs 2D */}
             <div className="tab-group">
-              <div 
+              <div
                 className={`tab-btn ${visSubTab === 'profile1d' ? 'active' : ''}`}
                 onClick={() => setVisSubTab('profile1d')}
               >
                 <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
                 <span>1D 单站深度剖面图</span>
               </div>
-              <div 
+              <div
                 className={`tab-btn ${visSubTab === 'contour2d' ? 'active' : ''}`}
                 onClick={() => setVisSubTab('contour2d')}
               >
@@ -1875,7 +2166,7 @@ export default function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     <div className="input-group" style={{ marginBottom: 0 }}>
                       <label className="input-label" style={{ fontSize: '12px' }}>选择目标站位</label>
-                      <select 
+                      <select
                         className="input-field font-semibold text-sm"
                         value={selectedStation}
                         onChange={e => setSelectedStation(e.target.value)}
@@ -1884,19 +2175,6 @@ export default function App() {
                           <option key={st} value={st}>{st}</option>
                         ))}
                       </select>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <input 
-                        type="checkbox" 
-                        id="showBackgroundMap1d"
-                        checked={showBackgroundMap} 
-                        onChange={e => setShowBackgroundMap(e.target.checked)} 
-                        style={{ cursor: 'pointer' }}
-                      />
-                      <label htmlFor="showBackgroundMap1d" style={{ fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer', margin: 0 }}>
-                        显示背景地图
-                      </label>
                     </div>
                   </div>
 
@@ -1908,46 +2186,30 @@ export default function App() {
                     </div>
                   ) : (
                     <div style={{ width: '100%', height: '220px', position: 'relative' }}>
-                      {showBackgroundMap && (
-                        <img 
-                          src="/station_map.jpg" 
-                          alt="station map" 
-                          style={{ 
-                            position: 'absolute', 
-                            top: 0, 
-                            left: 0, 
-                            width: '100%', 
-                            height: '100%', 
-                            objectFit: 'contain', 
-                            opacity: 0.65,
-                            pointerEvents: 'none'
-                          }} 
-                        />
-                      )}
                       <ResponsiveContainer width="100%" height="100%">
                         <ScatterChart margin={{ top: 10, right: 10, bottom: 5, left: -20 }} style={{ position: 'relative', zIndex: 1 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                          <XAxis 
-                            type="number" 
-                            dataKey="longitude" 
-                            name="经度 (Longitude)" 
-                            unit="°" 
-                            stroke="#94a3b8" 
+                          <XAxis
+                            type="number"
+                            dataKey="longitude"
+                            name="经度 (Longitude)"
+                            unit="°"
+                            stroke="#94a3b8"
                             fontSize={11}
                             domain={['dataMin - 0.5', 'dataMax + 0.5']}
                             tickFormatter={(v) => `${v}°`}
                           />
-                          <YAxis 
-                            type="number" 
-                            dataKey="latitude" 
-                            name="纬度 (Latitude)" 
-                            unit="°" 
-                            stroke="#94a3b8" 
+                          <YAxis
+                            type="number"
+                            dataKey="latitude"
+                            name="纬度 (Latitude)"
+                            unit="°"
+                            stroke="#94a3b8"
                             fontSize={11}
                             domain={['dataMin - 0.5', 'dataMax + 0.5']}
                             tickFormatter={(v) => `${v}°`}
                           />
-                          <Tooltip 
+                          <Tooltip
                             cursor={{ strokeDasharray: '3 3' }}
                             formatter={(value, name) => {
                               if (name === "经度 (Longitude)") return [`${value}°E`, "经度"];
@@ -1955,8 +2217,8 @@ export default function App() {
                               return [value, name];
                             }}
                           />
-                          <Scatter 
-                            name="测站" 
+                          <Scatter
+                            name="测站"
                             data={uniqueStationCoords.map(c => {
                               const isSelected = normalizeStationName(c.station) === normalizeStationName(selectedStation);
                               return {
@@ -1964,7 +2226,7 @@ export default function App() {
                                 fill: isSelected ? '#ef4444' : '#0284c7',
                                 size: isSelected ? 120 : 60
                               };
-                            })} 
+                            })}
                             onClick={(node) => {
                               if (node && node.station) {
                                 setSelectedStation(node.station);
@@ -1982,13 +2244,13 @@ export default function App() {
                       <span className="text-xs font-semibold text-slate-600">当前选择测站：<strong className="text-sky-600 font-bold">{selectedStation || '无'}</strong></span>
                       {selectedStation && (
                         <span className="text-[11px] text-slate-500 font-medium">
-                          经度: {uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(selectedStation))?.longitude.toFixed(4) ?? '-'}°E, 
+                          经度: {uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(selectedStation))?.longitude.toFixed(4) ?? '-'}°E,
                           纬度: {uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(selectedStation))?.latitude.toFixed(4) ?? '-'}°N
                         </span>
                       )}
                     </div>
                   )}
-                  
+
                   <div style={{ maxHeight: '180px', overflowY: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
                     <table className="custom-table" style={{ fontSize: '13px' }}>
                       <thead>
@@ -2012,8 +2274,8 @@ export default function App() {
                 <div className="card">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                     <h3 className="card-title" style={{ margin: 0 }}>{selectedStation} 站位 DOC 垂直剖面图 (Depth Profile)</h3>
-                    <button 
-                      className="btn btn-secondary" 
+                    <button
+                      className="btn btn-secondary"
                       style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
                       onClick={download1DPlot}
                     >
@@ -2021,7 +2283,7 @@ export default function App() {
                       <span>保存图片</span>
                     </button>
                   </div>
-                  
+
                   <div ref={chart1dContainerRef} style={{ width: '100%', height: '400px' }}>
                     {chart1dData.length === 0 ? (
                       <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
@@ -2037,12 +2299,12 @@ export default function App() {
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={true} horizontal={true} />
-                          <XAxis 
-                            type="number" 
-                            dataKey="concentration" 
-                            name="DOC 浓度" 
-                            unit=" µmol/L" 
-                            stroke="#475569" 
+                          <XAxis
+                            type="number"
+                            dataKey="concentration"
+                            name="DOC 浓度"
+                            unit=" µmol/L"
+                            stroke="#475569"
                             fontSize={11}
                             fontWeight="600"
                             domain={['dataMin - 5', 'dataMax + 5']}
@@ -2050,12 +2312,12 @@ export default function App() {
                             axisLine={{ stroke: '#cbd5e1' }}
                             tickLine={{ stroke: '#cbd5e1' }}
                           />
-                          <YAxis 
-                            type="number" 
-                            dataKey="depth" 
-                            name="深度" 
-                            unit=" m" 
-                            stroke="#475569" 
+                          <YAxis
+                            type="number"
+                            dataKey="depth"
+                            name="深度"
+                            unit=" m"
+                            stroke="#475569"
                             fontSize={11}
                             fontWeight="600"
                             reversed
@@ -2063,11 +2325,11 @@ export default function App() {
                             axisLine={{ stroke: '#cbd5e1' }}
                             tickLine={{ stroke: '#cbd5e1' }}
                           />
-                          <Tooltip 
-                            cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '4 4' }} 
-                            contentStyle={{ 
-                              backgroundColor: 'rgba(255, 255, 255, 0.95)', 
-                              borderRadius: '8px', 
+                          <Tooltip
+                            cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '4 4' }}
+                            contentStyle={{
+                              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                              borderRadius: '8px',
                               border: '1px solid #e2e8f0',
                               boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                               fontSize: '12px'
@@ -2078,32 +2340,32 @@ export default function App() {
                               return [value, name];
                             }}
                           />
-                          <Scatter 
-                            name="DOC 测定值" 
-                            data={chart1dData} 
-                            fill="url(#lineGrad)" 
+                          <Scatter
+                            name="DOC 测定值"
+                            data={chart1dData}
+                            fill="url(#lineGrad)"
                             line={{ stroke: '#2563eb', strokeWidth: 2 }}
                             shape={(props: any) => {
                               const { cx, cy } = props;
                               return (
-                                <circle 
-                                  cx={cx} 
-                                  cy={cy} 
-                                  r={5} 
-                                  fill="#2563eb" 
-                                  stroke="#ffffff" 
+                                <circle
+                                  cx={cx}
+                                  cy={cy}
+                                  r={5}
+                                  fill="#2563eb"
+                                  stroke="#ffffff"
                                   strokeWidth={1.5}
                                   style={{ filter: 'drop-shadow(0px 2px 4px rgba(37, 99, 235, 0.3))' }}
                                 />
                               );
                             }}
                           >
-                            <ErrorBar 
-                              dataKey="error" 
-                              direction="x" 
-                              stroke="#94a3b8" 
-                              strokeWidth={1} 
-                              width={4} 
+                            <ErrorBar
+                              dataKey="error"
+                              direction="x"
+                              stroke="#94a3b8"
+                              strokeWidth={1}
+                              width={4}
                             />
                           </Scatter>
                         </ScatterChart>
@@ -2124,52 +2386,52 @@ export default function App() {
                       <h4 className="font-semibold text-sm text-slate-700" style={{ margin: 0 }}>站位地理分布图 (二维散点图)</h4>
                       <div style={{ width: '100%', height: '150px', position: 'relative' }}>
                         {showBackgroundMap && (
-                          <img 
-                            src="/station_map.jpg" 
-                            alt="station map" 
-                            style={{ 
-                              position: 'absolute', 
-                              top: 0, 
-                              left: 0, 
-                              width: '100%', 
-                              height: '100%', 
-                              objectFit: 'contain', 
+                          <img
+                            src="/station_map.jpg"
+                            alt="station map"
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'contain',
                               opacity: 0.65,
                               pointerEvents: 'none'
-                            }} 
+                            }}
                           />
                         )}
                         <ResponsiveContainer width="100%" height="100%">
                           <ScatterChart margin={{ top: 5, right: 5, bottom: -5, left: -20 }} style={{ position: 'relative', zIndex: 1 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                            <XAxis 
-                              type="number" 
-                              dataKey="longitude" 
-                              name="经度" 
-                              unit="°" 
-                              stroke="#94a3b8" 
+                            <XAxis
+                              type="number"
+                              dataKey="longitude"
+                              name="经度"
+                              unit="°"
+                              stroke="#94a3b8"
                               fontSize={9}
                               domain={['dataMin - 0.5', 'dataMax + 0.5']}
                               tickFormatter={(v) => `${v}°`}
                             />
-                            <YAxis 
-                              type="number" 
-                              dataKey="latitude" 
-                              name="纬度" 
-                              unit="°" 
-                              stroke="#94a3b8" 
+                            <YAxis
+                              type="number"
+                              dataKey="latitude"
+                              name="纬度"
+                              unit="°"
+                              stroke="#94a3b8"
                               fontSize={9}
                               domain={['dataMin - 0.5', 'dataMax + 0.5']}
                               tickFormatter={(v) => `${v}°`}
                             />
-                            <Tooltip 
+                            <Tooltip
                               cursor={{ strokeDasharray: '3 3' }}
                               formatter={(value, name) => [`${value}°`, name === "longitude" ? "经度" : "纬度"]}
                             />
-                            <Scatter 
-                              name="测站" 
-                              data={uniqueStationCoords} 
-                              fill="#0284c7" 
+                            <Scatter
+                              name="测站"
+                              data={uniqueStationCoords}
+                              fill="#0284c7"
                             />
                           </ScatterChart>
                         </ResponsiveContainer>
@@ -2179,43 +2441,43 @@ export default function App() {
 
                   <div className="card">
                     <h3 className="card-title">绘图渲染选项</h3>
-                    
+
                     <div className="input-group">
                       <label className="input-label">色彩最小值 (µmol C / L)</label>
-                      <input 
-                        type="number" 
-                        className="input-field" 
-                        value={docMin} 
+                      <input
+                        type="number"
+                        className="input-field"
+                        value={docMin}
                         onChange={e => setDocMin(parseFloat(e.target.value) || 0)}
                       />
                     </div>
-                    
+
                     <div className="input-group">
                       <label className="input-label">色彩最大值 (µmol C / L)</label>
-                      <input 
-                        type="number" 
-                        className="input-field" 
-                        value={docMax} 
+                      <input
+                        type="number"
+                        className="input-field"
+                        value={docMax}
                         onChange={e => setDocMax(parseFloat(e.target.value) || 0)}
                       />
                     </div>
-                    
+
                     <div className="input-group">
                       <label className="input-label">等值线步长 (µmol / L)</label>
-                      <input 
-                        type="number" 
-                        className="input-field" 
-                        value={contourStep} 
+                      <input
+                        type="number"
+                        className="input-field"
+                        value={contourStep}
                         onChange={e => setContourStep(parseFloat(e.target.value) || 1)}
                       />
                     </div>
 
                     <div className="input-group">
                       <label className="input-label">IDW 插值权重幂次方 (Power)</label>
-                      <input 
-                        type="number" 
-                        className="input-field" 
-                        value={idwPower} 
+                      <input
+                        type="number"
+                        className="input-field"
+                        value={idwPower}
                         onChange={e => setIdwPower(parseFloat(e.target.value) || 1)}
                         step="0.5"
                         min="1"
@@ -2224,10 +2486,23 @@ export default function App() {
                     </div>
 
                     <div className="input-group">
+                      <label className="input-label">横/纵向各向异性比例 (Anisotropy)</label>
+                      <input
+                        type="number"
+                        className="input-field"
+                        value={anisotropyFactor}
+                        onChange={e => setAnisotropyFactor(parseFloat(e.target.value) || 1)}
+                        step="1"
+                        min="1"
+                        max="50"
+                      />
+                    </div>
+
+                    <div className="input-group">
                       <label className="input-label">横轴数据类型 (X-Axis)</label>
-                      <select 
-                        className="input-field" 
-                        value={contourXAxis} 
+                      <select
+                        className="input-field"
+                        value={contourXAxis}
                         onChange={e => setContourXAxis(e.target.value as any)}
                         style={{ fontWeight: '600' }}
                       >
@@ -2237,40 +2512,27 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '8px 0' }}>
-                      <input 
-                        type="checkbox" 
-                        id="showBackgroundMap2d"
-                        checked={showBackgroundMap} 
-                        onChange={e => setShowBackgroundMap(e.target.checked)} 
-                        style={{ cursor: 'pointer' }}
-                      />
-                      <label htmlFor="showBackgroundMap2d" style={{ fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer', margin: 0 }}>
-                        显示背景地图
-                      </label>
-                    </div>
-
                     <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       <h4 className="font-semibold text-xs text-slate-600" style={{ margin: 0 }}>断面范围筛选 (Zoom/Filter)</h4>
-                      
+
                       <div className="grid-2" style={{ gap: '8px' }}>
                         <div className="input-group" style={{ marginBottom: 0 }}>
                           <label className="input-label" style={{ fontSize: '11px' }}>最小深度 (m)</label>
-                          <input 
-                            type="number" 
-                            className="input-field" 
+                          <input
+                            type="number"
+                            className="input-field"
                             style={{ padding: '6px' }}
-                            value={minDepthFilter} 
+                            value={minDepthFilter}
                             onChange={e => setMinDepthFilter(parseFloat(e.target.value) || 0)}
                           />
                         </div>
                         <div className="input-group" style={{ marginBottom: 0 }}>
                           <label className="input-label" style={{ fontSize: '11px' }}>最大深度 (m)</label>
-                          <input 
-                            type="number" 
-                            className="input-field" 
+                          <input
+                            type="number"
+                            className="input-field"
                             style={{ padding: '6px' }}
-                            value={maxDepthFilter} 
+                            value={maxDepthFilter}
                             onChange={e => setMaxDepthFilter(parseFloat(e.target.value) || 0)}
                           />
                         </div>
@@ -2281,11 +2543,11 @@ export default function App() {
                           <label className="input-label" style={{ fontSize: '11px' }}>
                             {contourXAxis === 'station' ? '最小站位索引' : contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
                           </label>
-                          <input 
-                            type="number" 
-                            className="input-field" 
+                          <input
+                            type="number"
+                            className="input-field"
                             style={{ padding: '6px' }}
-                            value={minXFilter} 
+                            value={minXFilter}
                             onChange={e => setMinXFilter(parseFloat(e.target.value) || 0)}
                           />
                         </div>
@@ -2293,11 +2555,11 @@ export default function App() {
                           <label className="input-label" style={{ fontSize: '11px' }}>
                             {contourXAxis === 'station' ? '最大站位索引' : contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
                           </label>
-                          <input 
-                            type="number" 
-                            className="input-field" 
+                          <input
+                            type="number"
+                            className="input-field"
                             style={{ padding: '6px' }}
-                            value={maxXFilter} 
+                            value={maxXFilter}
                             onChange={e => setMaxXFilter(parseFloat(e.target.value) || 0)}
                           />
                         </div>
@@ -2309,18 +2571,18 @@ export default function App() {
                       <div className="legend-bar"></div>
                       <div className="legend-labels">
                         <span>{docMin} µmol/L</span>
-                        <span>{(docMin + (docMax - docMin)/2).toFixed(0)}</span>
+                        <span>{(docMin + (docMax - docMin) / 2).toFixed(0)}</span>
                         <span>{docMax} µmol/L</span>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '660px', overflowX: 'auto' }}>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '890px', overflowX: 'auto' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', width: '100%' }}>
                     <h3 className="card-title" style={{ margin: 0 }}>DOC 空间断面等值线分布图</h3>
-                    <button 
-                      className="btn btn-secondary" 
+                    <button
+                      className="btn btn-secondary"
                       style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
                       onClick={download2DPlot}
                     >
@@ -2328,28 +2590,28 @@ export default function App() {
                       <span>保存图片</span>
                     </button>
                   </div>
-                  
+
                   {/* ODV styled window container */}
-                  <div style={{ position: 'relative', width: '620px', height: '450px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
-                    
-                    {/* Main Canvas Plot (starting at left 50px, top 30px) */}
-                    <canvas 
-                      ref={canvasRef} 
-                      width={500} 
-                      height={380} 
-                      style={{ position: 'absolute', top: '30px', left: '50px', width: '500px', height: '380px', zIndex: 1, border: '1px solid #000000' }}
+                  <div style={{ position: 'relative', width: '850px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
+
+                    {/* Main Canvas Plot (starting at left 60px, top 90px) */}
+                    <canvas
+                      ref={canvasRef}
+                      width={720}
+                      height={380}
+                      style={{ position: 'absolute', top: '90px', left: '60px', width: '720px', height: '380px', zIndex: 1, border: '1px solid #000000' }}
                     />
-                    
+
                     {/* SVG overlay (starts at 0, 0 and covers the labels area too) */}
-                    <svg 
-                      width={620} 
-                      height={450} 
-                      style={{ position: 'absolute', top: 0, left: 0, width: '620px', height: '450px', zIndex: 2, pointerEvents: 'none' }}
+                    <svg
+                      width={850}
+                      height={540}
+                      style={{ position: 'absolute', top: 0, left: 0, width: '850px', height: '540px', zIndex: 2, pointerEvents: 'none' }}
                     >
                       {/* Clipping path definition to keep contours within the black border */}
                       <defs>
                         <clipPath id="plot-area-clip">
-                          <rect x={50} y={30} width={500} height={380} />
+                          <rect x={60} y={90} width={720} height={380} />
                         </clipPath>
                         <linearGradient id="bathyGrad" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="#1e293b" stopOpacity="0.85" />
@@ -2361,13 +2623,13 @@ export default function App() {
                       <g clipPath="url(#plot-area-clip)">
                         {contourSvgPaths.map((p: { path: string; value: number }, i: number) => {
                           return (
-                            <path 
-                              key={i} 
-                              d={p.path} 
-                              transform="translate(50, 30)"
-                              fill="none" 
-                              stroke="rgba(255, 255, 255, 0.45)" 
-                              strokeWidth="1.5" 
+                            <path
+                              key={i}
+                              d={p.path}
+                              transform="translate(60, 90)"
+                              fill="none"
+                              stroke="rgba(255, 255, 255, 0.45)"
+                              strokeWidth="1.5"
                             />
                           );
                         })}
@@ -2376,7 +2638,7 @@ export default function App() {
                         {bathyPath && (
                           <path
                             d={bathyPath}
-                            transform="translate(50, 30)"
+                            transform="translate(60, 90)"
                             fill="url(#bathyGrad)"
                             stroke="#0ea5e9"
                             strokeWidth="2.5"
@@ -2385,13 +2647,13 @@ export default function App() {
 
                         {/* Black dots overlay representing measurement depth/locations */}
                         {contourDataPoints.map((pt, i) => (
-                          <circle 
-                            key={i} 
-                            cx={pt.cx + 50} 
-                            cy={pt.cy + 30} 
-                            r={4} 
-                            fill="#000000" 
-                            stroke="#ffffff" 
+                          <circle
+                            key={i}
+                            cx={pt.cx + 60}
+                            cy={pt.cy + 90}
+                            r={4}
+                            fill="#000000"
+                            stroke="#ffffff"
                             strokeWidth={0.75}
                           >
                             <title>浓度: {pt.conc.toFixed(2)} µmol/L</title>
@@ -2400,19 +2662,19 @@ export default function App() {
                       </g>
 
                       {/* ODV Border Outline */}
-                      <rect x={50} y={30} width={500} height={380} fill="none" stroke="#000000" strokeWidth="1" />
+                      <rect x={60} y={90} width={720} height={380} fill="none" stroke="#000000" strokeWidth="1" />
 
                       {/* Left Y-Axis Ticks & Labels (Depth [m]) */}
-                      <text x={15} y={220} fill="#1e293b" fontSize={11} fontWeight="bold" textAnchor="middle" transform="rotate(-90 15 220)">
+                      <text x={20} y={280} fill="#1e293b" fontSize={11} fontWeight="bold" textAnchor="middle" transform="rotate(-90 20 280)">
                         Depth [m]
                       </text>
                       {[0.0, 0.25, 0.5, 0.75, 1.0].map((r, i) => {
                         const depthVal = (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0);
-                        const yPos = 30 + 380 * r;
+                        const yPos = 90 + 380 * r;
                         return (
                           <g key={i}>
-                            <line x1={45} y1={yPos} x2={50} y2={yPos} stroke="#000000" strokeWidth="1" />
-                            <text x={40} y={yPos + 4} fill="#1e293b" fontSize={10} fontWeight="600" textAnchor="end">
+                            <line x1={55} y1={yPos} x2={60} y2={yPos} stroke="#000000" strokeWidth="1" />
+                            <text x={50} y={yPos + 4} fill="#1e293b" fontSize={10} fontWeight="600" textAnchor="end">
                               {depthVal}
                             </text>
                           </g>
@@ -2420,20 +2682,20 @@ export default function App() {
                       })}
 
                       {/* Bottom X-Axis Ticks & Labels (Longitude / Latitude / Station index) */}
-                      <text x={300} y={442} fill="#1e293b" fontSize={11} fontWeight="bold" textAnchor="middle">
+                      <text x={420} y={530} fill="#1e293b" fontSize={11} fontWeight="bold" textAnchor="middle">
                         {contourXAxis === 'station' ? 'Station Index' : contourXAxis === 'longitude' ? 'Longitude [°E]' : 'Latitude [°N]'}
                       </text>
                       {interpolatedPoints.map((pt: { x: number; y: number; name: string }, i: number) => {
-                        const xPos = pt.x + 50;
+                        const xPos = pt.x + 60;
                         return (
                           <g key={i}>
-                            <line x1={xPos} y1={410} x2={xPos} y2={415} stroke="#000000" strokeWidth="1" />
-                            <text 
-                              x={xPos} 
-                              y={428} 
-                              fill="#1e293b" 
-                              fontSize={9} 
-                              fontWeight="600" 
+                            <line x1={xPos} y1={470} x2={xPos} y2={475} stroke="#000000" strokeWidth="1" />
+                            <text
+                              x={xPos}
+                              y={488}
+                              fill="#1e293b"
+                              fontSize={9}
+                              fontWeight="600"
                               textAnchor="middle"
                             >
                               {pt.name}
@@ -2443,34 +2705,49 @@ export default function App() {
                       })}
 
                       {/* Top Axis Ticks & Labels (Station Name Indicators) */}
-                      {topStationTicks.map((tick, i) => {
-                        const xPos = tick.cx + 50;
-                        if (xPos < 50 || xPos > 550) return null;
-                        return (
-                          <g key={i}>
-                            <line x1={xPos} y1={25} x2={xPos} y2={30} stroke="#000000" strokeWidth="1" />
-                            <text 
-                              x={xPos} 
-                              y={18} 
-                              fill="#0369a1" 
-                              fontSize={9} 
-                              fontWeight="bold" 
-                              textAnchor="middle"
-                            >
-                              {tick.name}
-                            </text>
-                          </g>
-                        );
-                      })}
+                      {(() => {
+                        const sortedTicks = [...topStationTicks].sort((a, b) => a.cx - b.cx);
+                        let lastLabelX = -999;
+                        const minLabelSpacing = 16; // min horizontal pixels between station name start positions
+
+                        return sortedTicks.map((tick, i) => {
+                          const xPos = tick.cx + 60;
+                          if (xPos < 60 || xPos > 780) return null;
+
+                          const showLabel = (xPos - lastLabelX) >= minLabelSpacing;
+                          if (showLabel) {
+                            lastLabelX = xPos;
+                          }
+
+                          return (
+                            <g key={i}>
+                              <line x1={xPos} y1={86} x2={xPos} y2={90} stroke="#000000" strokeWidth="1" />
+                              {showLabel && (
+                                <text
+                                  x={xPos}
+                                  y={83}
+                                  fill="#0369a1"
+                                  fontSize={8}
+                                  fontWeight="bold"
+                                  textAnchor="start"
+                                  transform={`rotate(-60, ${xPos}, 83)`}
+                                >
+                                  {tick.name}
+                                </text>
+                              )}
+                            </g>
+                          );
+                        });
+                      })()}
 
                       {/* Colorbar Tick Labels (drawn on the right side of color bar) */}
                       {[0.0, 0.25, 0.5, 0.75, 1.0].map((r, i) => {
                         const val = docMin + (docMax - docMin) * r;
-                        const yPos = 410 - 380 * r; // align with gradient bottom-up
+                        const yPos = 470 - 380 * r; // align with gradient bottom-up
                         return (
                           <g key={i}>
-                            <line x1={585} y1={yPos} x2={590} y2={yPos} stroke="#000000" strokeWidth="1" />
-                            <text x={594} y={yPos + 4} fill="#1e293b" fontSize={9} fontWeight="600" textAnchor="start">
+                            <line x1={815} y1={yPos} x2={820} y2={yPos} stroke="#000000" strokeWidth="1" />
+                            <text x={824} y={yPos + 4} fill="#1e293b" fontSize={9} fontWeight="600" textAnchor="start">
                               {val.toFixed(1)}
                             </text>
                           </g>
@@ -2481,8 +2758,8 @@ export default function App() {
                     {/* Vertical Colorbar Gradient Panel */}
                     <div style={{
                       position: 'absolute',
-                      left: '570px',
-                      top: '30px',
+                      left: '800px',
+                      top: '90px',
                       width: '15px',
                       height: '380px',
                       background: 'linear-gradient(to top, #1e3a8a, #0284c7, #10b981, #f59e0b, #ef4444)',
@@ -2493,8 +2770,8 @@ export default function App() {
                     {/* Colorbar Title */}
                     <div style={{
                       position: 'absolute',
-                      left: '556px',
-                      top: '10px',
+                      left: '786px',
+                      top: '70px',
                       fontSize: '9px',
                       fontWeight: 'bold',
                       color: '#1e293b',
@@ -2503,31 +2780,8 @@ export default function App() {
                       DOC [µmol/L]
                     </div>
 
-                    {/* ODV Mini Inset Map (bottom left) */}
-                    {showBackgroundMap && (
-                      <div style={{
-                        position: 'absolute',
-                        left: '60px',
-                        top: '290px',
-                        width: '110px',
-                        height: '110px',
-                        backgroundColor: '#ffffff',
-                        border: '1.5px solid #000000',
-                        boxShadow: '0 2px 5px rgba(0,0,0,0.3)',
-                        padding: '3px',
-                        zIndex: 10
-                      }}>
-                        <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
-                          <img 
-                            src="/station_map.jpg" 
-                            alt="station map inset" 
-                            style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
-                  
+
                   <div style={{ display: 'flex', gap: '20px', marginTop: '16px', fontSize: '12px', color: '#64748b', flexWrap: 'wrap', justifyContent: 'center' }}>
                     <span>※ 横轴表示：{contourXAxis === 'station' ? '测站序号 (按升序)' : contourXAxis === 'longitude' ? '经度' : '纬度'}</span>
                     <span>※ 纵轴表示：海水深度 (米，0米在最顶端反向刻度)</span>
@@ -2575,7 +2829,7 @@ export default function App() {
 
         {/* Wizard Footer Navigation Controls */}
         <div className="wizard-footer">
-          <button 
+          <button
             className="btn btn-secondary"
             onClick={() => currentStep > 1 && setCurrentStep(prev => prev - 1)}
             disabled={currentStep === 1}
@@ -2583,12 +2837,12 @@ export default function App() {
             <ChevronLeft size={16} />
             <span>上一步</span>
           </button>
-          
-          <button 
+
+          <button
             className="btn btn-primary"
             onClick={() => currentStep < 5 && setCurrentStep(prev => prev + 1)}
             disabled={
-              (currentStep === 1 && files.length === 0) || 
+              (currentStep === 1 && files.length === 0) ||
               (currentStep === 2 && !(calibrationCurve.slope > 0)) ||
               currentStep === 5
             }

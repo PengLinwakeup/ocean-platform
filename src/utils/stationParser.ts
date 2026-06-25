@@ -41,7 +41,7 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
     const lblCol = row.findIndex(cell => {
       if (cell === null || cell === undefined) return false;
       const c = cell.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
-      return c.includes('lableiddoc') || c.includes('labelid') || c.includes('label') || c === 'id' || c.includes('样品编号') || c.includes('样品名称') || c.includes('编号');
+      return c.includes('lable') || c.includes('label') || c === 'id' || c.includes('样品编号') || c.includes('样品名称') || c.includes('编号');
     });
 
     const sCol = row.findIndex(cell => {
