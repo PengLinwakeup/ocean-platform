@@ -1380,7 +1380,7 @@ export default function App() {
           {/* Stepper background line progress */}
           <div
             className="stepper-progress"
-            style={{ width: `${((currentStep - 1) / (stepLabelMap.length - 1)) * 100 - 8}%` }}
+            style={{ width: `calc(${((currentStep - 1) / (stepLabelMap.length - 1))} * (100% - 120px))` }}
           ></div>
 
           {stepLabelMap.map((label, idx) => {
