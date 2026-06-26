@@ -38,9 +38,9 @@ export default function App() {
 
   // Standard curve parameters
   const [stdStockC, setStdStockC] = useState<number>(() => loadSavedState('ocean_stdStockC', 10000)); // standard stock concentration (µmol C / L)
-  const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(() => loadSavedState('ocean_stdDilutionFactor', 25.2423)); // standard dilution factor
-  const [stdUsedC, setStdUsedC] = useState<number>(() => loadSavedState('ocean_stdUsedC', 396.16)); // used standard uM C
-  const [dilutionFactors, setDilutionFactors] = useState<number[]>(() => loadSavedState('ocean_dilutionFactors', [15, 10, 6, 5, 4, 3]));
+  const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(() => loadSavedState('ocean_stdDilutionFactor', 25.2525)); // standard dilution factor
+  const [stdUsedC, setStdUsedC] = useState<number>(() => loadSavedState('ocean_stdUsedC', 396)); // used standard uM C
+  const [dilutionFactors, setDilutionFactors] = useState<number[]>(() => loadSavedState('ocean_dilutionFactors', [21, 10, 6, 5, 4, 3]));
 
   const handleStdStockCChange = (val: number) => {
     setStdStockC(val);
@@ -69,6 +69,9 @@ export default function App() {
   // Sample manual overrides
   const [excludedInjections, setExcludedInjections] = useState<Record<string, boolean[]>>(() => loadSavedState('ocean_excludedInjections', {})); // group id -> boolean array of excluded injections
   const [rejectedSamples, setRejectedSamples] = useState<Record<string, boolean>>(() => loadSavedState('ocean_rejectedSamples', {})); // group id -> rejected boolean
+  const [customSampleNames, setCustomSampleNames] = useState<Record<string, string>>(() => loadSavedState('ocean_customSampleNames', {}));
+  const [activeQcModalCurveId, setActiveQcModalCurveId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState<number>(1);
 
   // Visualization options
   const [selectedStation, setSelectedStation] = useState<string>(() => loadSavedState('ocean_selectedStation', ''));
@@ -80,6 +83,11 @@ export default function App() {
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => loadSavedState('ocean_selectedCurveId', ''));
   const [emptyInjectionThreshold, setEmptyInjectionThreshold] = useState<number>(() => loadSavedState('ocean_emptyInjectionThreshold', 0.1));
   const [anisotropyFactor, setAnisotropyFactor] = useState<number>(() => loadSavedState('ocean_anisotropyFactor', 15));
+
+  // Reset active page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [sampleSortOrder]);
 
   // ODV-style and Background Map states
   const [contourXAxis, setContourXAxis] = useState<'station' | 'longitude' | 'latitude'>(() => loadSavedState<'station' | 'longitude' | 'latitude'>('ocean_contourXAxis', 'station'));
@@ -104,6 +112,7 @@ export default function App() {
     localStorage.setItem('ocean_customDilutions', JSON.stringify(customDilutions));
     localStorage.setItem('ocean_excludedInjections', JSON.stringify(excludedInjections));
     localStorage.setItem('ocean_rejectedSamples', JSON.stringify(rejectedSamples));
+    localStorage.setItem('ocean_customSampleNames', JSON.stringify(customSampleNames));
     localStorage.setItem('ocean_selectedStation', JSON.stringify(selectedStation));
     localStorage.setItem('ocean_docMin', JSON.stringify(docMin));
     localStorage.setItem('ocean_docMax', JSON.stringify(docMax));
@@ -122,7 +131,7 @@ export default function App() {
   }, [
     currentStep, visSubTab, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
-    excludedInjections, rejectedSamples, selectedStation, docMin, docMax,
+    excludedInjections, rejectedSamples, customSampleNames, selectedStation, docMin, docMax,
     contourStep, idwPower, sampleSortOrder, selectedCurveId,
     emptyInjectionThreshold, anisotropyFactor, contourXAxis, minDepthFilter,
     maxDepthFilter, minXFilter, maxXFilter, showBackgroundMap
@@ -318,6 +327,7 @@ export default function App() {
     setCustomDilutions({});
     setExcludedInjections({});
     setRejectedSamples({});
+    setCustomSampleNames({});
     setSelectedStation('');
     setCurrentStep(1);
 
@@ -326,7 +336,7 @@ export default function App() {
       'ocean_currentStep', 'ocean_visSubTab', 'ocean_files', 'ocean_rawInjections',
       'ocean_stationCoords', 'ocean_stdStockC', 'ocean_stdDilutionFactor', 'ocean_stdUsedC',
       'ocean_dilutionFactors', 'ocean_enabledStds', 'ocean_customDilutions',
-      'ocean_excludedInjections', 'ocean_rejectedSamples', 'ocean_selectedStation',
+      'ocean_excludedInjections', 'ocean_rejectedSamples', 'ocean_customSampleNames', 'ocean_selectedStation',
       'ocean_docMin', 'ocean_docMax', 'ocean_contourStep', 'ocean_idwPower',
       'ocean_sampleSortOrder', 'ocean_selectedCurveId', 'ocean_emptyInjectionThreshold',
       'ocean_anisotropyFactor', 'ocean_contourXAxis', 'ocean_minDepthFilter',
@@ -351,6 +361,15 @@ export default function App() {
       return copy;
     });
     setRejectedSamples(prev => {
+      const copy = { ...prev };
+      Object.keys(copy).forEach(key => {
+        if (key.startsWith(`${fileName}::`)) {
+          delete copy[key];
+        }
+      });
+      return copy;
+    });
+    setCustomSampleNames(prev => {
       const copy = { ...prev };
       Object.keys(copy).forEach(key => {
         if (key.startsWith(`${fileName}::`)) {
@@ -404,13 +423,14 @@ export default function App() {
     // Finalize groups: calculate average, standard deviation, classifications
     return groups.map((g, idx) => {
       const id = `${g.fileName}::${g.sampleName}::${g.sampleId}::${idx}`;
+      const displayName = customSampleNames[id] !== undefined ? customSampleNames[id] : g.sampleName;
 
-      const isStd = g.sampleName.toLowerCase().includes('std');
-      const isBlank = g.sampleName.toLowerCase().includes('blank') || g.sampleName.toLowerCase().includes('mq');
-      const isSeawater = g.sampleName.toLowerCase() === 'dsw' || g.sampleName.toLowerCase() === 'ssw' || g.sampleName.toLowerCase().startsWith('sw');
+      const isStd = displayName.toLowerCase().includes('std');
+      const isBlank = displayName.toLowerCase().includes('blank') || displayName.toLowerCase().includes('mq');
+      const isSeawater = displayName.toLowerCase() === 'dsw' || displayName.toLowerCase() === 'ssw' || displayName.toLowerCase().startsWith('sw');
 
       // Try matching via Excel sample info (Label ID matching sampleName)
-      const normName = normalizeStationName(g.sampleName);
+      const normName = normalizeStationName(displayName);
       let excelMatch = stationCoords.find(c => normalizeStationName(c.labelId) === normName);
 
       // Fuzzy/Partial matching fallback: check if one contains the other (for non-standard names)
@@ -431,13 +451,13 @@ export default function App() {
         depth = excelMatch.depth;
       } else {
         // Fallback to pattern parsing from sampleName
-        const stDepthMatch = g.sampleName.match(/ST(\d+)-(\d+)/i);
+        const stDepthMatch = displayName.match(/ST(\d+)-(\d+)/i);
         if (stDepthMatch) {
           station = `ST${stDepthMatch[1]}`;
           depth = parseInt(stDepthMatch[2], 10);
         } else {
-          const parts = g.sampleName.split('-');
-          const stPart = parts.find(p => p.toUpperCase().startsWith('ST'));
+          const parts = displayName.split('-');
+          const stPart = parts.find((p: string) => p.toUpperCase().startsWith('ST'));
           if (stPart) {
             station = stPart.toUpperCase();
           }
@@ -501,7 +521,7 @@ export default function App() {
       return {
         id,
         fileName: g.fileName,
-        sampleName: g.sampleName,
+        sampleName: displayName,
         sampleId: g.sampleId,
         injections: g.injections,
         selectedInjections: finalSelected,
@@ -515,7 +535,7 @@ export default function App() {
         depth
       } as SampleGroup;
     });
-  }, [rawInjections, excludedInjections, emptyInjectionThreshold, stationCoords]);
+  }, [rawInjections, excludedInjections, emptyInjectionThreshold, stationCoords, customSampleNames]);
 
   // Set default station
   useEffect(() => {
@@ -800,6 +820,18 @@ export default function App() {
       return s.station === qcSelectedStation;
     });
   }, [sortedProcessedSamples, qcSelectedStation]);
+
+  const itemsPerPage = 20;
+  const paginatedQcSamples = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredQcSamples.slice(start, start + itemsPerPage);
+  }, [filteredQcSamples, currentPage]);
+
+  const totalPages = Math.ceil(filteredQcSamples.length / itemsPerPage) || 1;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [qcSelectedStation]);
 
   const dataBounds = useMemo(() => {
     const valid = processedSamples.filter(s => s.station !== null && s.depth !== null && !s.isRejected);
@@ -1333,15 +1365,13 @@ export default function App() {
 
     let pathStr = "";
     if (bathyPoints.length > 0) {
-      const firstPt = bathyPoints[0];
-      const lastPt = bathyPoints[bathyPoints.length - 1];
-
-      pathStr = `M${firstPt.cx},${canvasHeight + 100}`;
-      pathStr += ` L${firstPt.cx},${firstPt.cy}`;
+      pathStr = `M0,${canvasHeight}`;
+      pathStr += ` L0,${Math.max(0, Math.min(canvasHeight, bathyPoints[0].cy))}`;
       bathyPoints.forEach(pt => {
-        pathStr += ` L${pt.cx},${pt.cy}`;
+        pathStr += ` L${Math.max(0, Math.min(canvasWidth, pt.cx))},${Math.max(0, Math.min(canvasHeight, pt.cy))}`;
       });
-      pathStr += ` L${lastPt.cx},${canvasHeight + 100} Z`;
+      pathStr += ` L${canvasWidth},${Math.max(0, Math.min(canvasHeight, bathyPoints[bathyPoints.length - 1].cy))}`;
+      pathStr += ` L${canvasWidth},${canvasHeight} Z`;
     }
     setBathyPath(pathStr);
 
@@ -1944,6 +1974,76 @@ export default function App() {
               </div>
             </div>
 
+            {/* Batch Calibration Curves & Reference QC Monitoring Table */}
+            <div className="card mb-6">
+              <h3 className="card-title">分批次工作曲线与参标质控监控表</h3>
+              <div className="table-container">
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      <th>工作曲线批次</th>
+                      <th>所属文件</th>
+                      <th>斜率 (Slope)</th>
+                      <th>截距 (Intercept)</th>
+                      <th>回归系数 (R²)</th>
+                      <th>DSW 参标均值 (41-45 µmol/L)</th>
+                      <th>SSW 参标均值 (70-80 µmol/L)</th>
+                      <th>判定状态</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {calibrationCurves.map((curve) => {
+                      const curveSamples = processedSamples.filter(s => sampleToCurveMap[s.id] === curve.id && !s.isRejected);
+                      const dsws = curveSamples.filter(s => s.sampleName.toLowerCase() === 'dsw');
+                      const ssws = curveSamples.filter(s => s.sampleName.toLowerCase() === 'ssw');
+                      
+                      const avgDsw = calculateMean(dsws.map(d => d.concentration));
+                      const avgSsw = calculateMean(ssws.map(s => s.concentration));
+                      
+                      const isDswOk = dsws.length === 0 || (avgDsw >= 41 && avgDsw <= 45);
+                      const isSswOk = ssws.length === 0 || (avgSsw >= 70 && avgSsw <= 80);
+                      const status = isDswOk && isSswOk ? "合格" : "超标";
+                      
+                      return (
+                        <tr key={curve.id}>
+                          <td className="font-semibold text-sky-700">{curve.name}</td>
+                          <td className="text-xs text-slate-500">{curve.fileName}</td>
+                          <td>{curve.slope.toFixed(6)}</td>
+                          <td>{curve.intercept.toFixed(6)}</td>
+                          <td>
+                            <span className={curve.rsq >= 0.99 ? "text-emerald-600 font-semibold" : "text-rose-500 font-semibold"}>
+                              {curve.rsq.toFixed(6)}
+                            </span>
+                          </td>
+                          <td className={!isDswOk ? "text-amber-600 font-bold" : "text-slate-700 font-medium"}>
+                            {dsws.length > 0 ? `${avgDsw.toFixed(2)}` : "-"}
+                          </td>
+                          <td className={!isSswOk ? "text-amber-600 font-bold" : "text-slate-700 font-medium"}>
+                            {ssws.length > 0 ? `${avgSsw.toFixed(2)}` : "-"}
+                          </td>
+                          <td>
+                            <span className={`badge ${status === '合格' ? 'badge-success' : 'badge-warning'}`}>
+                              {status}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '4px 8px', fontSize: '12px' }}
+                              onClick={() => setActiveQcModalCurveId(curve.id)}
+                            >
+                              点击审核
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                 <h3 className="card-title" style={{ margin: 0 }}>样品浓度数据列表</h3>
@@ -2017,21 +2117,25 @@ export default function App() {
                       <th>样品名称</th>
                       <th>站位</th>
                       <th>深度 (m)</th>
+                      <th>DOC 浓度 (µmol/L)</th>
+                      <th>误差 (µmol/L)</th>
                       <th>使用工作曲线</th>
-                      <th>每次注射面积 (点击圆点包含/排除)</th>
                       <th>平均面积</th>
                       <th>面积SD</th>
                       <th>面积RSD (%)</th>
-                      <th>DOC 浓度 (µmol/L)</th>
-                      <th>误差 (µmol/L)</th>
+                      <th>每次注射面积 (包含/排除) 与计算浓度 (µmol/L)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredQcSamples.map((s) => {
+                    {paginatedQcSamples.map((s) => {
                       const isRsdHigh = s.rsd > 2.0;
                       let trClass = "";
                       if (s.isRejected) trClass = "tr-danger opacity-50";
                       else if (isRsdHigh) trClass = "tr-warning";
+
+                      const curve = calibrationCurves.find(c => c.id === s.curveId) || calibrationCurves[0];
+                      const slope = curve?.slope || 1;
+                      const intercept = curve?.intercept || 0;
 
                       return (
                         <tr key={s.id} className={trClass}>
@@ -2043,14 +2147,45 @@ export default function App() {
                               style={{ cursor: 'pointer' }}
                             />
                           </td>
-                          <td className="font-semibold">{s.sampleName}</td>
+                          <td>
+                            <input
+                              type="text"
+                              value={s.sampleName}
+                              onChange={e => {
+                                const newName = e.target.value;
+                                setCustomSampleNames((prev: Record<string, string>) => ({ ...prev, [s.id]: newName }));
+                              }}
+                              className="input-field py-1 px-2 text-xs"
+                              style={{
+                                border: '1px solid #e2e8f0',
+                                background: '#fff',
+                                fontWeight: 'bold',
+                                width: '130px',
+                                borderRadius: '4px',
+                                padding: '2px 6px'
+                              }}
+                            />
+                          </td>
                           <td>{s.station || "-"}</td>
                           <td>{s.depth !== null ? `${s.depth} m` : "-"}</td>
+                          <td className="font-semibold text-sky-700">{s.concentration.toFixed(2)}</td>
+                          <td className="text-xs text-slate-500">± {s.error.toFixed(2)}</td>
                           <td style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>{s.curveName}</td>
+                          <td>{s.avArea.toFixed(4)}</td>
+                          <td>{s.sdArea.toFixed(4)}</td>
+                          <td>
+                            <span className={isRsdHigh ? "text-amber-600 font-bold" : ""}>
+                              {s.rsd.toFixed(2)}%
+                            </span>
+                            {isRsdHigh && !s.isRejected && (
+                              <span title="RSD 超过 2%"><AlertTriangle size={12} className="text-amber-500 inline ml-1" /></span>
+                            )}
+                          </td>
                           <td>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                               {s.injections.map((area, i) => {
                                 const injNo = i + 1;
+                                const injConc = (area - intercept) / slope;
                                 return (
                                   <div 
                                     key={i}
@@ -2058,7 +2193,7 @@ export default function App() {
                                       display: 'flex', 
                                       alignItems: 'center', 
                                       gap: '4px',
-                                      padding: '2px 6px',
+                                      padding: '4px 6px',
                                       borderRadius: '6px',
                                       backgroundColor: s.selectedInjections[i] ? 'var(--primary-light)' : '#f1f5f9',
                                       border: `1px solid ${s.selectedInjections[i] ? 'var(--primary)' : '#cbd5e1'}`,
@@ -2073,58 +2208,358 @@ export default function App() {
                                         height: '8px', 
                                         borderRadius: '50%', 
                                         backgroundColor: s.selectedInjections[i] ? 'var(--primary)' : '#94a3b8',
-                                        display: 'inline-block' 
+                                        display: 'inline-block',
+                                        flexShrink: 0
                                       }}
                                       title={s.selectedInjections[i] ? "点击排除本次注射" : "点击包含本次注射"}
                                     />
-                                    <input
-                                      type="number"
-                                      step="any"
-                                      value={area}
-                                      onChange={(e) => {
-                                        const val = parseFloat(e.target.value) || 0;
-                                        handleUpdateInjectionArea(s.fileName, s.sampleName, s.sampleId, injNo, val);
-                                      }}
-                                      style={{
-                                        width: '62px',
-                                        border: 'none',
-                                        background: 'transparent',
-                                        fontSize: '12px',
-                                        fontWeight: '600',
-                                        color: s.selectedInjections[i] ? 'var(--text-primary)' : 'var(--text-muted)',
-                                        textDecoration: s.selectedInjections[i] ? 'none' : 'line-through',
-                                        textAlign: 'center',
-                                        outline: 'none',
-                                        padding: 0
-                                      }}
-                                      title="直接输入修改数值"
-                                    />
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                      <input
+                                        type="number"
+                                        step="any"
+                                        value={area}
+                                        onChange={(e) => {
+                                          const val = parseFloat(e.target.value) || 0;
+                                          handleUpdateInjectionArea(s.fileName, s.sampleName, s.sampleId, injNo, val);
+                                        }}
+                                        style={{
+                                          width: '62px',
+                                          border: 'none',
+                                          background: 'transparent',
+                                          fontSize: '12px',
+                                          fontWeight: '600',
+                                          color: s.selectedInjections[i] ? 'var(--text-primary)' : 'var(--text-muted)',
+                                          textDecoration: s.selectedInjections[i] ? 'none' : 'line-through',
+                                          textAlign: 'center',
+                                          outline: 'none',
+                                          padding: 0
+                                        }}
+                                        title="直接输入修改数值"
+                                      />
+                                      <span style={{ 
+                                        fontSize: '10px', 
+                                        color: s.selectedInjections[i] ? '#0369a1' : '#94a3b8',
+                                        fontWeight: '500',
+                                        marginTop: '1px'
+                                      }}>
+                                        {injConc.toFixed(2)}
+                                      </span>
+                                    </div>
                                   </div>
                                 );
                               })}
                             </div>
                           </td>
-                          <td>{s.avArea.toFixed(4)}</td>
-                          <td>{s.sdArea.toFixed(4)}</td>
-                          <td>
-                            <span className={isRsdHigh ? "text-amber-600 font-bold" : ""}>
-                              {s.rsd.toFixed(2)}%
-                            </span>
-                            {isRsdHigh && !s.isRejected && (
-                              <span title="RSD 超过 2%"><AlertTriangle size={12} className="text-amber-500 inline ml-1" /></span>
-                            )}
-                          </td>
-                          <td className="font-semibold text-sky-700">{s.concentration.toFixed(2)}</td>
-                          <td className="text-xs text-slate-500">± {s.error.toFixed(2)}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginTop: '20px' }}>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '13px' }}
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  >
+                    上一页
+                  </button>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                    第 {currentPage} 页 / 共 {totalPages} 页 (共 {filteredQcSamples.length} 个样品)
+                  </span>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '13px' }}
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  >
+                    下一页
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
+
+        {/* Batch QC Modal popup dialog */}
+        {activeQcModalCurveId && (() => {
+          const curve = calibrationCurves.find(c => c.id === activeQcModalCurveId);
+          if (!curve) return null;
+
+          const curveSamples = processedSamples.filter(s => sampleToCurveMap[s.id] === curve.id);
+          const dsws = curveSamples.filter(s => !s.isRejected && s.sampleName.toLowerCase() === 'dsw');
+          const ssws = curveSamples.filter(s => !s.isRejected && s.sampleName.toLowerCase() === 'ssw');
+          
+          const avgDsw = calculateMean(dsws.map(d => d.concentration));
+          const avgSsw = calculateMean(ssws.map(s => s.concentration));
+          
+          const isDswOk = dsws.length === 0 || (avgDsw >= 41 && avgDsw <= 45);
+          const isSswOk = ssws.length === 0 || (avgSsw >= 70 && avgSsw <= 80);
+
+          return (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 9999,
+                padding: '20px'
+              }}
+            >
+              <div 
+                style={{
+                  backgroundColor: '#ffffff',
+                  borderRadius: '12px',
+                  width: '100%',
+                  maxWidth: '1200px',
+                  maxHeight: '90vh',
+                  overflowY: 'auto',
+                  boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
+                  display: 'flex',
+                  flexDirection: 'column'
+                }}
+              >
+                {/* Modal Header */}
+                <div 
+                  style={{
+                    padding: '20px 24px',
+                    borderBottom: '1px solid #f1f5f9',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    backgroundColor: '#f8fafc',
+                    borderTopLeftRadius: '12px',
+                    borderTopRightRadius: '12px'
+                  }}
+                >
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
+                      {curve.name} - 批次数据质控审核
+                    </h3>
+                    <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                      文件：{curve.fileName}
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setActiveQcModalCurveId(null)}
+                    style={{
+                      border: 'none',
+                      background: 'none',
+                      fontSize: '24px',
+                      cursor: 'pointer',
+                      color: '#64748b',
+                      padding: '4px'
+                    }}
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                {/* Modal Stats Bar */}
+                <div 
+                  style={{
+                    padding: '16px 24px',
+                    borderBottom: '1px solid #f1f5f9',
+                    backgroundColor: '#fff',
+                    display: 'flex',
+                    gap: '24px',
+                    flexWrap: 'wrap'
+                  }}
+                >
+                  <div style={{ fontSize: '13px', color: '#334155' }}>
+                    斜率 (Slope): <strong style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{curve.slope.toFixed(6)}</strong>
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#334155' }}>
+                    截距 (Intercept): <strong style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{curve.intercept.toFixed(6)}</strong>
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#334155' }}>
+                    回归系数 (R²): <strong style={{ color: curve.rsq >= 0.99 ? 'var(--success)' : 'var(--danger)', fontFamily: 'monospace' }}>{curve.rsq.toFixed(6)}</strong>
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#334155' }}>
+                    DSW 参标: <strong style={{ color: isDswOk ? 'var(--success)' : 'var(--warning)' }}>{dsws.length > 0 ? `${avgDsw.toFixed(2)} µmol/L` : '-'}</strong> (41-45)
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#334155' }}>
+                    SSW 参标: <strong style={{ color: isSswOk ? 'var(--success)' : 'var(--warning)' }}>{ssws.length > 0 ? `${avgSsw.toFixed(2)} µmol/L` : '-'}</strong> (70-80)
+                  </div>
+                </div>
+
+                {/* Modal Body Table */}
+                <div style={{ padding: '24px', overflowX: 'auto' }}>
+                  <table className="custom-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '50px' }}>使用</th>
+                        <th>样品名称</th>
+                        <th>站位</th>
+                        <th>深度 (m)</th>
+                        <th>DOC 浓度 (µmol/L)</th>
+                        <th>误差 (µmol/L)</th>
+                        <th>平均面积</th>
+                        <th>面积SD</th>
+                        <th>面积RSD (%)</th>
+                        <th>每次注射面积 (包含/排除) 与计算浓度 (µmol/L)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {curveSamples.map((s) => {
+                        const isRsdHigh = s.rsd > 2.0;
+                        let trClass = "";
+                        if (s.isRejected) trClass = "tr-danger opacity-50";
+                        else if (isRsdHigh) trClass = "tr-warning";
+
+                        return (
+                          <tr key={s.id} className={trClass}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={!s.isRejected}
+                                onChange={() => handleToggleRejection(s.id)}
+                                style={{ cursor: 'pointer' }}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                value={s.sampleName}
+                                onChange={e => {
+                                  const newName = e.target.value;
+                                  setCustomSampleNames((prev: Record<string, string>) => ({ ...prev, [s.id]: newName }));
+                                }}
+                                className="input-field py-1 px-2 text-xs"
+                                style={{
+                                  border: '1px solid #e2e8f0',
+                                  background: '#fff',
+                                  fontWeight: 'bold',
+                                  width: '130px',
+                                  borderRadius: '4px',
+                                  padding: '2px 6px'
+                                }}
+                              />
+                            </td>
+                            <td>{s.station || "-"}</td>
+                            <td>{s.depth !== null ? `${s.depth} m` : "-"}</td>
+                            <td className="font-semibold text-sky-700">{s.concentration.toFixed(2)}</td>
+                            <td className="text-xs text-slate-500">± {s.error.toFixed(2)}</td>
+                            <td>{s.avArea.toFixed(4)}</td>
+                            <td>{s.sdArea.toFixed(4)}</td>
+                            <td>
+                              <span className={isRsdHigh ? "text-amber-600 font-bold" : ""}>
+                                {s.rsd.toFixed(2)}%
+                              </span>
+                              {isRsdHigh && !s.isRejected && (
+                                <span title="RSD 超过 2%"><AlertTriangle size={12} className="text-amber-500 inline ml-1" /></span>
+                              )}
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                {s.injections.map((area, i) => {
+                                  const injNo = i + 1;
+                                  const injConc = (area - curve.intercept) / curve.slope;
+                                  return (
+                                    <div 
+                                      key={i}
+                                      style={{ 
+                                        display: 'flex', 
+                                        alignItems: 'center', 
+                                        gap: '4px',
+                                        padding: '4px 6px',
+                                        borderRadius: '6px',
+                                        backgroundColor: s.selectedInjections[i] ? 'var(--primary-light)' : '#f1f5f9',
+                                        border: `1px solid ${s.selectedInjections[i] ? 'var(--primary)' : '#cbd5e1'}`,
+                                        transition: 'all 0.15s ease'
+                                      }}
+                                    >
+                                      <span
+                                        onClick={() => handleToggleInjection(s.id, i)}
+                                        style={{ 
+                                          cursor: 'pointer', 
+                                          width: '8px', 
+                                          height: '8px', 
+                                          borderRadius: '50%', 
+                                          backgroundColor: s.selectedInjections[i] ? 'var(--primary)' : '#94a3b8',
+                                          display: 'inline-block',
+                                          flexShrink: 0
+                                        }}
+                                        title={s.selectedInjections[i] ? "点击排除本次注射" : "点击包含本次注射"}
+                                      />
+                                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                        <input
+                                          type="number"
+                                          step="any"
+                                          value={area}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            handleUpdateInjectionArea(s.fileName, s.sampleName, s.sampleId, injNo, val);
+                                          }}
+                                          style={{
+                                            width: '62px',
+                                            border: 'none',
+                                            background: 'transparent',
+                                            fontSize: '12px',
+                                            fontWeight: '600',
+                                            color: s.selectedInjections[i] ? 'var(--text-primary)' : 'var(--text-muted)',
+                                            textDecoration: s.selectedInjections[i] ? 'none' : 'line-through',
+                                            textAlign: 'center',
+                                            outline: 'none',
+                                            padding: 0
+                                          }}
+                                          title="直接输入修改数值"
+                                        />
+                                        <span style={{ 
+                                          fontSize: '10px', 
+                                          color: s.selectedInjections[i] ? '#0369a1' : '#94a3b8',
+                                          fontWeight: '500',
+                                          marginTop: '1px'
+                                        }}>
+                                          {injConc.toFixed(2)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Modal Footer */}
+                <div 
+                  style={{
+                    padding: '16px 24px',
+                    borderTop: '1px solid #f1f5f9',
+                    backgroundColor: '#f8fafc',
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    borderBottomLeftRadius: '12px',
+                    borderBottomRightRadius: '12px'
+                  }}
+                >
+                  <button 
+                    className="btn btn-primary"
+                    onClick={() => setActiveQcModalCurveId(null)}
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Step 4: Visualizations */}
         {currentStep === 4 && (
