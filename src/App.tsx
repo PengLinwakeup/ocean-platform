@@ -27,6 +27,27 @@ const loadSavedState = <T,>(key: string, defaultValue: T): T => {
   }
 };
 
+interface ChartStyles {
+  fontFamily: string;
+  fontSizeTitle: number;
+  fontSizeAxisLabel: number;
+  fontSizeAxisTick: number;
+  stationLabelAngle: number;
+  stationLabelColor: string;
+  pointRadius: number;
+  pointFill: string;
+  pointStroke: string;
+  pointStrokeWidth: number;
+  lineStroke: string;
+  lineWidth: number;
+  bathyFill: string;
+  bathyStroke: string;
+  bathyStrokeWidth: number;
+  axisStroke: string;
+  gridStroke: string;
+  colorbarWidth: number;
+}
+
 export default function App() {
   const [currentStep, setCurrentStep] = useState<number>(() => loadSavedState('ocean_currentStep', 1));
   const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>(() => loadSavedState<'profile1d' | 'contour2d'>('ocean_visSubTab', 'profile1d'));
@@ -97,6 +118,34 @@ export default function App() {
   const [maxXFilter, setMaxXFilter] = useState<number>(() => loadSavedState('ocean_maxXFilter', 180));
   const [showBackgroundMap] = useState<boolean>(() => loadSavedState('ocean_showBackgroundMap', false));
 
+  const [visSettingsTab, setVisSettingsTab] = useState<'data' | 'style'>(() => loadSavedState('ocean_visSettingsTab', 'data'));
+  const [chartStyles, setChartStyles] = useState<ChartStyles>(() => {
+    const saved = localStorage.getItem('ocean_chart_styles');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { /* ignore */ }
+    }
+    return {
+      fontFamily: "'Times New Roman', Times, serif",
+      fontSizeTitle: 14,
+      fontSizeAxisLabel: 11,
+      fontSizeAxisTick: 9,
+      stationLabelAngle: -60,
+      stationLabelColor: '#475569',
+      pointRadius: 4,
+      pointFill: '#000000',
+      pointStroke: '#ffffff',
+      pointStrokeWidth: 0.75,
+      lineStroke: 'rgba(255, 255, 255, 0.45)',
+      lineWidth: 1.5,
+      bathyFill: 'url(#bathyGrad)',
+      bathyStroke: '#0ea5e9',
+      bathyStrokeWidth: 2.5,
+      axisStroke: '#000000',
+      gridStroke: '#cbd5e1',
+      colorbarWidth: 15
+    };
+  });
+
   // Save state to LocalStorage for persistence
   useEffect(() => {
     localStorage.setItem('ocean_currentStep', JSON.stringify(currentStep));
@@ -128,13 +177,15 @@ export default function App() {
     localStorage.setItem('ocean_minXFilter', JSON.stringify(minXFilter));
     localStorage.setItem('ocean_maxXFilter', JSON.stringify(maxXFilter));
     localStorage.setItem('ocean_showBackgroundMap', JSON.stringify(showBackgroundMap));
+    localStorage.setItem('ocean_visSettingsTab', JSON.stringify(visSettingsTab));
+    localStorage.setItem('ocean_chart_styles', JSON.stringify(chartStyles));
   }, [
     currentStep, visSubTab, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
     excludedInjections, rejectedSamples, customSampleNames, selectedStation, docMin, docMax,
     contourStep, idwPower, sampleSortOrder, selectedCurveId,
     emptyInjectionThreshold, anisotropyFactor, contourXAxis, minDepthFilter,
-    maxDepthFilter, minXFilter, maxXFilter, showBackgroundMap
+    maxDepthFilter, minXFilter, maxXFilter, showBackgroundMap, visSettingsTab, chartStyles
   ]);
 
 
@@ -2813,7 +2864,9 @@ export default function App() {
 
             {/* Sub-tab: 2D Contour */}
             {visSubTab === 'contour2d' && (
-              <div className="grid-1-2">
+              <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: '24px', alignItems: 'start' }}>
+                
+                {/* ================= LEFT SIDEBAR: ORIGIN STYLE MICROPANEL ================= */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {/* Top-Left Station scatter map on 2D tab */}
                   {stationCoords.length > 0 && (
@@ -2875,144 +2928,209 @@ export default function App() {
                   )}
 
                   <div className="card">
-                    <h3 className="card-title">绘图渲染选项</h3>
-
-                    <div className="input-group">
-                      <label className="input-label">色彩最小值 (µmol C / L)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={docMin}
-                        onChange={e => setDocMin(parseFloat(e.target.value) || 0)}
-                      />
+                    <div className="tab-group" style={{ marginBottom: '12px' }}>
+                      <div className={`tab-btn ${visSettingsTab === 'data' ? 'active' : ''}`} onClick={() => setVisSettingsTab('data')}>数据过滤</div>
+                      <div className={`tab-btn ${visSettingsTab === 'style' ? 'active' : ''}`} onClick={() => setVisSettingsTab('style')}>🛠️ 学术样式 (Origin)</div>
                     </div>
 
-                    <div className="input-group">
-                      <label className="input-label">色彩最大值 (µmol C / L)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={docMax}
-                        onChange={e => setDocMax(parseFloat(e.target.value) || 0)}
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <label className="input-label">等值线步长 (µmol / L)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={contourStep}
-                        onChange={e => setContourStep(parseFloat(e.target.value) || 1)}
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <label className="input-label">IDW 插值权重幂次方 (Power)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={idwPower}
-                        onChange={e => setIdwPower(parseFloat(e.target.value) || 1)}
-                        step="0.5"
-                        min="1"
-                        max="4"
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <label className="input-label">横/纵向各向异性比例 (Anisotropy)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={anisotropyFactor}
-                        onChange={e => setAnisotropyFactor(parseFloat(e.target.value) || 1)}
-                        step="1"
-                        min="1"
-                        max="50"
-                      />
-                    </div>
-
-                    <div className="input-group">
-                      <label className="input-label">横轴数据类型 (X-Axis)</label>
-                      <select
-                        className="input-field"
-                        value={contourXAxis}
-                        onChange={e => setContourXAxis(e.target.value as any)}
-                        style={{ fontWeight: '600' }}
-                      >
-                        <option value="station">站位序号 (Station Index)</option>
-                        <option value="longitude">经度 (Longitude)</option>
-                        <option value="latitude">纬度 (Latitude)</option>
-                      </select>
-                    </div>
-
-                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <h4 className="font-semibold text-xs text-slate-600" style={{ margin: 0 }}>断面范围筛选 (Zoom/Filter)</h4>
-
-                      <div className="grid-2" style={{ gap: '8px' }}>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <label className="input-label" style={{ fontSize: '11px' }}>最小深度 (m)</label>
+                    {visSettingsTab === 'data' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div className="input-group">
+                          <label className="input-label">色彩最小值 (µmol C / L)</label>
                           <input
                             type="number"
                             className="input-field"
-                            style={{ padding: '6px' }}
-                            value={minDepthFilter}
-                            onChange={e => setMinDepthFilter(parseFloat(e.target.value) || 0)}
+                            value={docMin}
+                            onChange={e => setDocMin(parseFloat(e.target.value) || 0)}
                           />
                         </div>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <label className="input-label" style={{ fontSize: '11px' }}>最大深度 (m)</label>
+
+                        <div className="input-group">
+                          <label className="input-label">色彩最大值 (µmol C / L)</label>
                           <input
                             type="number"
                             className="input-field"
-                            style={{ padding: '6px' }}
-                            value={maxDepthFilter}
-                            onChange={e => setMaxDepthFilter(parseFloat(e.target.value) || 0)}
+                            value={docMax}
+                            onChange={e => setDocMax(parseFloat(e.target.value) || 0)}
                           />
+                        </div>
+
+                        <div className="input-group">
+                          <label className="input-label">等值线步长 (µmol / L)</label>
+                          <input
+                            type="number"
+                            className="input-field"
+                            value={contourStep}
+                            onChange={e => setContourStep(parseFloat(e.target.value) || 1)}
+                          />
+                        </div>
+
+                        <div className="input-group">
+                          <label className="input-label">IDW 插值权重幂次方 (Power)</label>
+                          <input
+                            type="number"
+                            className="input-field"
+                            value={idwPower}
+                            onChange={e => setIdwPower(parseFloat(e.target.value) || 1)}
+                            step="0.5"
+                            min="1"
+                            max="4"
+                          />
+                        </div>
+
+                        <div className="input-group">
+                          <label className="input-label">横/纵向各向异性比例 (Anisotropy)</label>
+                          <input
+                            type="number"
+                            className="input-field"
+                            value={anisotropyFactor}
+                            onChange={e => setAnisotropyFactor(parseFloat(e.target.value) || 1)}
+                            step="1"
+                            min="1"
+                            max="50"
+                          />
+                        </div>
+
+                        <div className="input-group">
+                          <label className="input-label">横轴数据类型 (X-Axis)</label>
+                          <select
+                            className="input-field"
+                            value={contourXAxis}
+                            onChange={e => setContourXAxis(e.target.value as any)}
+                            style={{ fontWeight: '600' }}
+                          >
+                            <option value="station">站位序号 (Station Index)</option>
+                            <option value="longitude">经度 (Longitude)</option>
+                            <option value="latitude">纬度 (Latitude)</option>
+                          </select>
+                        </div>
+
+                        <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                          <h4 className="font-semibold text-xs text-slate-600" style={{ margin: 0 }}>断面范围筛选 (Zoom/Filter)</h4>
+
+                          <div className="grid-2" style={{ gap: '8px' }}>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                              <label className="input-label" style={{ fontSize: '11px' }}>最小深度 (m)</label>
+                              <input
+                                type="number"
+                                className="input-field"
+                                style={{ padding: '6px' }}
+                                value={minDepthFilter}
+                                onChange={e => setMinDepthFilter(parseFloat(e.target.value) || 0)}
+                              />
+                            </div>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                              <label className="input-label" style={{ fontSize: '11px' }}>最大深度 (m)</label>
+                              <input
+                                type="number"
+                                className="input-field"
+                                style={{ padding: '6px' }}
+                                value={maxDepthFilter}
+                                onChange={e => setMaxDepthFilter(parseFloat(e.target.value) || 0)}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid-2" style={{ gap: '8px' }}>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                              <label className="input-label" style={{ fontSize: '11px' }}>
+                                {contourXAxis === 'station' ? '最小站位索引' : contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
+                              </label>
+                              <input
+                                type="number"
+                                className="input-field"
+                                style={{ padding: '6px' }}
+                                value={minXFilter}
+                                onChange={e => setMinXFilter(parseFloat(e.target.value) || 0)}
+                              />
+                            </div>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                              <label className="input-label" style={{ fontSize: '11px' }}>
+                                {contourXAxis === 'station' ? '最大站位索引' : contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
+                              </label>
+                              <input
+                                type="number"
+                                className="input-field"
+                                style={{ padding: '6px' }}
+                                value={maxXFilter}
+                                onChange={e => setMaxXFilter(parseFloat(e.target.value) || 0)}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: '24px' }}>
+                          <div className="legend-bar"></div>
+                          <div className="legend-labels">
+                            <span>{docMin} µmol/L</span>
+                            <span>{(docMin + (docMax - docMin) / 2).toFixed(0)}</span>
+                            <span>{docMax} µmol/L</span>
+                          </div>
                         </div>
                       </div>
+                    )}
 
-                      <div className="grid-2" style={{ gap: '8px' }}>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <label className="input-label" style={{ fontSize: '11px' }}>
-                            {contourXAxis === 'station' ? '最小站位索引' : contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
-                          </label>
-                          <input
-                            type="number"
-                            className="input-field"
-                            style={{ padding: '6px' }}
-                            value={minXFilter}
-                            onChange={e => setMinXFilter(parseFloat(e.target.value) || 0)}
-                          />
+                    {/* 🎨 THE RESTORED ORIGIN STYLE INTERACTIVE SUITE */}
+                    {visSettingsTab === 'style' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div className="input-group">
+                          <label className="input-label">图表全局字体 (Font Family)</label>
+                          <select className="input-field" style={{ fontSize: '12px' }} value={chartStyles.fontFamily} onChange={e => setChartStyles(prev => ({ ...prev, fontFamily: e.target.value }))}>
+                            <option value="'Times New Roman', Times, serif">Times New Roman (地学论文经典)</option>
+                            <option value="Arial, Helvetica, sans-serif">Arial (标准无衬线)</option>
+                            <option value="Helvetica, sans-serif">Helvetica (高规格排版)</option>
+                            <option value="'Courier New', monospace">Courier New (技术打字机)</option>
+                          </select>
                         </div>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <label className="input-label" style={{ fontSize: '11px' }}>
-                            {contourXAxis === 'station' ? '最大站位索引' : contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
-                          </label>
-                          <input
-                            type="number"
-                            className="input-field"
-                            style={{ padding: '6px' }}
-                            value={maxXFilter}
-                            onChange={e => setMaxXFilter(parseFloat(e.target.value) || 0)}
-                          />
+
+                        <div className="grid-3" style={{ gap: '8px' }}>
+                          <div className="input-group">
+                            <label className="input-label" style={{ fontSize: '10px' }}>轴标字号</label>
+                            <input type="number" className="input-field" value={chartStyles.fontSizeAxisLabel} onChange={e => setChartStyles(prev => ({ ...prev, fontSizeAxisLabel: parseInt(e.target.value) || 10 }))} />
+                          </div>
+                          <div className="input-group">
+                            <label className="input-label" style={{ fontSize: '10px' }}>刻度字号</label>
+                            <input type="number" className="input-field" value={chartStyles.fontSizeAxisTick} onChange={e => setChartStyles(prev => ({ ...prev, fontSizeAxisTick: parseInt(e.target.value) || 8 }))} />
+                          </div>
+                          <div className="input-group">
+                            <label className="input-label" style={{ fontSize: '10px' }}>站标字号</label>
+                            <input type="number" className="input-field" value={chartStyles.fontSizeTitle} onChange={e => setChartStyles(prev => ({ ...prev, fontSizeTitle: parseInt(e.target.value) || 8 }))} />
+                          </div>
+                        </div>
+
+                        <div className="input-group">
+                          <label className="input-label">顶轴标签偏转夹角: {chartStyles.stationLabelAngle}°</label>
+                          <input type="range" min="-90" max="0" step="15" className="w-full" value={chartStyles.stationLabelAngle} onChange={e => setChartStyles(prev => ({ ...prev, stationLabelAngle: parseInt(e.target.value) }))} />
+                        </div>
+
+                        <div className="input-group">
+                          <label className="input-label">右侧色带条宽度: {chartStyles.colorbarWidth}px</label>
+                          <input type="range" min="10" max="35" step="1" className="w-full" value={chartStyles.colorbarWidth} onChange={e => setChartStyles(prev => ({ ...prev, colorbarWidth: parseInt(e.target.value) }))} />
+                        </div>
+
+                        <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                          <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>色彩盘微调 (Color Pickers)</label>
+                          <div className="grid-3" style={{ gap: '8px', marginTop: '6px' }}>
+                            <div>
+                              <span style={{ fontSize: '9px', display: 'block', textAlign: 'center' }}>站名色</span>
+                              <input type="color" style={{ width: '100%', height: '24px', cursor: 'pointer' }} value={chartStyles.stationLabelColor} onChange={e => setChartStyles(prev => ({ ...prev, stationLabelColor: e.target.value }))} />
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '9px', display: 'block', textAlign: 'center' }}>等值线色</span>
+                              <input type="color" style={{ width: '100%', height: '24px', cursor: 'pointer' }} value={chartStyles.axisStroke} onChange={e => setChartStyles(prev => ({ ...prev, axisStroke: e.target.value }))} />
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '9px', display: 'block', textAlign: 'center' }}>网格轴色</span>
+                              <input type="color" style={{ width: '100%', height: '24px', cursor: 'pointer' }} value={chartStyles.gridStroke} onChange={e => setChartStyles(prev => ({ ...prev, gridStroke: e.target.value }))} />
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-
-
-                    <div style={{ marginTop: '24px' }}>
-                      <div className="legend-bar"></div>
-                      <div className="legend-labels">
-                        <span>{docMin} µmol/L</span>
-                        <span>{(docMin + (docMax - docMin) / 2).toFixed(0)}</span>
-                        <span>{docMax} µmol/L</span>
-                      </div>
-                    </div>
+                    )}
                   </div>
                 </div>
 
+                {/* ================= RIGHT SIDEBAR: HIGH-DEF LANDSCAPE CANVAS WINDOW ================= */}
                 <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '890px', overflowX: 'auto' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', width: '100%' }}>
                     <h3 className="card-title" style={{ margin: 0 }}>DOC 空间断面等值线分布图</h3>
@@ -3034,14 +3152,14 @@ export default function App() {
                       ref={canvasRef}
                       width={720}
                       height={380}
-                      style={{ position: 'absolute', top: '90px', left: '60px', width: '720px', height: '380px', zIndex: 1, border: '1px solid #000000' }}
+                      style={{ position: 'absolute', top: '90px', left: '60px', width: '720px', height: '380px', zIndex: 1, border: `1px solid ${chartStyles.axisStroke}` }}
                     />
 
                     {/* SVG overlay (starts at 0, 0 and covers the labels area too) */}
                     <svg
                       width={850}
                       height={540}
-                      style={{ position: 'absolute', top: 0, left: 0, width: '850px', height: '540px', zIndex: 2, pointerEvents: 'none' }}
+                      style={{ position: 'absolute', top: 0, left: 0, width: '850px', height: '540px', zIndex: 2, pointerEvents: 'none', fontFamily: chartStyles.fontFamily }}
                     >
                       {/* Clipping path definition to keep contours within the black border */}
                       <defs>
@@ -3063,8 +3181,8 @@ export default function App() {
                               d={p.path}
                               transform="translate(60, 90)"
                               fill="none"
-                              stroke="rgba(255, 255, 255, 0.45)"
-                              strokeWidth="1.5"
+                              stroke={chartStyles.lineStroke}
+                              strokeWidth={chartStyles.lineWidth}
                             />
                           );
                         })}
@@ -3074,9 +3192,9 @@ export default function App() {
                           <path
                             d={bathyPath}
                             transform="translate(60, 90)"
-                            fill="url(#bathyGrad)"
-                            stroke="#0ea5e9"
-                            strokeWidth="2.5"
+                            fill={chartStyles.bathyFill}
+                            stroke={chartStyles.bathyStroke}
+                            strokeWidth={chartStyles.bathyStrokeWidth}
                           />
                         )}
 
@@ -3086,10 +3204,10 @@ export default function App() {
                             key={i}
                             cx={pt.cx + 60}
                             cy={pt.cy + 90}
-                            r={4}
-                            fill="#000000"
-                            stroke="#ffffff"
-                            strokeWidth={0.75}
+                            r={chartStyles.pointRadius}
+                            fill={chartStyles.pointFill}
+                            stroke={chartStyles.pointStroke}
+                            strokeWidth={chartStyles.pointStrokeWidth}
                           >
                             <title>浓度: {pt.conc.toFixed(2)} µmol/L</title>
                           </circle>
@@ -3097,10 +3215,10 @@ export default function App() {
                       </g>
 
                       {/* ODV Border Outline */}
-                      <rect x={60} y={90} width={720} height={380} fill="none" stroke="#000000" strokeWidth="1" />
+                      <rect x={60} y={90} width={720} height={380} fill="none" stroke={chartStyles.axisStroke} strokeWidth="1" />
 
                       {/* Left Y-Axis Ticks & Labels (Depth [m]) */}
-                      <text x={20} y={280} fill="#1e293b" fontSize={11} fontWeight="bold" textAnchor="middle" transform="rotate(-90 20 280)">
+                      <text x={20} y={280} fill={chartStyles.axisStroke} fontSize={chartStyles.fontSizeAxisLabel} fontWeight="bold" textAnchor="middle" transform="rotate(-90 20 280)">
                         Depth [m]
                       </text>
                       {[0.0, 0.25, 0.5, 0.75, 1.0].map((r, i) => {
@@ -3108,8 +3226,8 @@ export default function App() {
                         const yPos = 90 + 380 * r;
                         return (
                           <g key={i}>
-                            <line x1={55} y1={yPos} x2={60} y2={yPos} stroke="#000000" strokeWidth="1" />
-                            <text x={50} y={yPos + 4} fill="#1e293b" fontSize={10} fontWeight="600" textAnchor="end">
+                            <line x1={55} y1={yPos} x2={60} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                            <text x={50} y={yPos + 4} fill={chartStyles.axisStroke} fontSize={chartStyles.fontSizeAxisTick} fontWeight="600" textAnchor="end">
                               {depthVal}
                             </text>
                           </g>
@@ -3117,19 +3235,19 @@ export default function App() {
                       })}
 
                       {/* Bottom X-Axis Ticks & Labels (Longitude / Latitude / Station index) */}
-                      <text x={420} y={530} fill="#1e293b" fontSize={11} fontWeight="bold" textAnchor="middle">
+                      <text x={420} y={530} fill={chartStyles.axisStroke} fontSize={chartStyles.fontSizeAxisLabel} fontWeight="bold" textAnchor="middle">
                         {contourXAxis === 'station' ? 'Station Index' : contourXAxis === 'longitude' ? 'Longitude [°E]' : 'Latitude [°N]'}
                       </text>
                       {interpolatedPoints.map((pt: { x: number; y: number; name: string }, i: number) => {
                         const xPos = pt.x + 60;
                         return (
                           <g key={i}>
-                            <line x1={xPos} y1={470} x2={xPos} y2={475} stroke="#000000" strokeWidth="1" />
+                            <line x1={xPos} y1={470} x2={xPos} y2={475} stroke={chartStyles.axisStroke} strokeWidth="1" />
                             <text
                               x={xPos}
                               y={488}
-                              fill="#1e293b"
-                              fontSize={9}
+                              fill={chartStyles.axisStroke}
+                              fontSize={chartStyles.fontSizeAxisTick}
                               fontWeight="600"
                               textAnchor="middle"
                             >
@@ -3139,11 +3257,11 @@ export default function App() {
                         );
                       })}
 
-                      {/* Top Axis Ticks & Labels (Station Name Indicators) */}
+                      {/* Top Axis Ticks & Labels (Station Name Indicators with Overlap Mitigation) */}
                       {(() => {
                         const sortedTicks = [...topStationTicks].sort((a, b) => a.cx - b.cx);
                         let lastLabelX = -999;
-                        const minLabelSpacing = 16; // min horizontal pixels between station name start positions
+                        const minLabelSpacing = 15; // min horizontal pixels between station name start positions
 
                         return sortedTicks.map((tick, i) => {
                           const xPos = tick.cx + 60;
@@ -3156,16 +3274,16 @@ export default function App() {
 
                           return (
                             <g key={i}>
-                              <line x1={xPos} y1={86} x2={xPos} y2={90} stroke="#000000" strokeWidth="1" />
+                              <line x1={xPos} y1={86} x2={xPos} y2={90} stroke={chartStyles.axisStroke} strokeWidth="1" />
                               {showLabel && (
                                 <text
                                   x={xPos}
                                   y={83}
-                                  fill="#0369a1"
-                                  fontSize={8}
+                                  fill={chartStyles.stationLabelColor}
+                                  fontSize={chartStyles.fontSizeAxisTick - 0.5}
                                   fontWeight="bold"
                                   textAnchor="start"
-                                  transform={`rotate(-60, ${xPos}, 83)`}
+                                  transform={`rotate(${chartStyles.stationLabelAngle}, ${xPos}, 83)`}
                                 >
                                   {tick.name}
                                 </text>
@@ -3178,11 +3296,12 @@ export default function App() {
                       {/* Colorbar Tick Labels (drawn on the right side of color bar) */}
                       {[0.0, 0.25, 0.5, 0.75, 1.0].map((r, i) => {
                         const val = docMin + (docMax - docMin) * r;
+                        const xLineStart = 795 + 5 + chartStyles.colorbarWidth;
                         const yPos = 470 - 380 * r; // align with gradient bottom-up
                         return (
                           <g key={i}>
-                            <line x1={815} y1={yPos} x2={820} y2={yPos} stroke="#000000" strokeWidth="1" />
-                            <text x={824} y={yPos + 4} fill="#1e293b" fontSize={9} fontWeight="600" textAnchor="start">
+                            <line x1={xLineStart} y1={yPos} x2={xLineStart + 5} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                            <text x={xLineStart + 9} y={yPos + 4} fill={chartStyles.axisStroke} fontSize={chartStyles.fontSizeAxisTick} fontWeight="600" textAnchor="start">
                               {val.toFixed(1)}
                             </text>
                           </g>
@@ -3190,22 +3309,22 @@ export default function App() {
                       })}
                     </svg>
 
-                    {/* Vertical Colorbar Gradient Panel */}
+                    {/* Adaptive Bandwidth Colorbar Panel */}
                     <div style={{
                       position: 'absolute',
-                      left: '800px',
+                      left: '795px',
                       top: '90px',
-                      width: '15px',
+                      width: `${chartStyles.colorbarWidth}px`,
                       height: '380px',
                       background: 'linear-gradient(to top, #1e3a8a, #0284c7, #10b981, #f59e0b, #ef4444)',
-                      border: '1px solid #000000',
+                      border: `1px solid ${chartStyles.axisStroke}`,
                       zIndex: 3
                     }} />
 
                     {/* Colorbar Title */}
                     <div style={{
                       position: 'absolute',
-                      left: '786px',
+                      left: '782px',
                       top: '70px',
                       fontSize: '9px',
                       fontWeight: 'bold',
