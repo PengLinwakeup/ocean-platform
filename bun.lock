@@ -9,6 +9,7 @@
         "d3-scale": "^4.0.2",
         "exceljs": "^4.4.0",
         "lucide-react": "^0.435.0",
+        "plotly.js-dist-min": "^3.6.0",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
         "recharts": "^2.12.7",
@@ -18,6 +19,7 @@
       "devDependencies": {
         "@types/d3-contour": "^3.0.6",
         "@types/d3-scale": "^4.0.8",
+        "@types/plotly.js": "^3.0.10",
         "@types/react": "^18.3.3",
         "@types/react-dom": "^18.3.0",
         "@vitejs/plugin-react": "^4.3.1",
@@ -212,6 +214,8 @@
     "@types/geojson": ["@types/geojson@7946.0.16", "", {}, "sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg=="],
 
     "@types/node": ["@types/node@14.18.63", "", {}, "sha512-fAtCfv4jJg+ExtXhvCkCqUKZ+4ok/JQk01qDKhL5BDDoS3AxKXhV5/MAVUZyQnSEd2GT92fkgZl0pz0Q0AzcIQ=="],
+
+    "@types/plotly.js": ["@types/plotly.js@3.0.10", "", {}, "sha512-q+MgO4aajC2HrO7FllTYWzrpdfbTjboSMfjkz/aXKjg1v7HNo1zMEFfAW7quKfk6SL+bH74A5ThBEps/7hZxOA=="],
 
     "@types/prop-types": ["@types/prop-types@15.7.15", "", {}, "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw=="],
 
@@ -426,6 +430,8 @@
     "path-is-absolute": ["path-is-absolute@1.0.1", "", {}, "sha512-AVbw3UJ2e9bq64vSaS9Am0fje1Pa8pbGqTTsmXfaIiMpnr5DlDhfJOuLj9Sf95ZPVDAUerDfEk88MPmPe7UCQg=="],
 
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
+
+    "plotly.js-dist-min": ["plotly.js-dist-min@3.6.0", "", {}, "sha512-VR9jO2YdcEwbzVwtRyPE0eAieXFv1x5q6M9nnIgUS8FggahPrjiID6kzpnTYABwLX0gZkgEc0zxS6gQgVmgHzw=="],
 
     "postcss": ["postcss@8.5.15", "", { "dependencies": { "nanoid": "^3.3.12", "picocolors": "^1.1.1", "source-map-js": "^1.2.1" } }, "sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A=="],
 
