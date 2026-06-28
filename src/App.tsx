@@ -71,10 +71,17 @@ export default function App() {
   const [customSampleNames, setCustomSampleNames] = useState<Record<string, string>>(() => loadSavedState('ocean_customSampleNames', {}));
   const [activeQcModalCurveId, setActiveQcModalCurveId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [disabledCurves, setDisabledCurves] = useState<Record<string, boolean>>(() => loadSavedState('ocean_disabledCurves', {}));
+  const [customStdUsedCs, setCustomStdUsedCs] = useState<Record<string, number>>(() => loadSavedState('ocean_customStdUsedCs', {}));
 
   const [sampleSortOrder, setSampleSortOrder] = useState<'import' | 'category' | 'name' | 'concentration'>(() => loadSavedState<'import' | 'category' | 'name' | 'concentration'>('ocean_sampleSortOrder', 'category'));
   const [selectedCurveId, setSelectedCurveId] = useState<string>(() => loadSavedState('ocean_selectedCurveId', ''));
   const [emptyInjectionThreshold, setEmptyInjectionThreshold] = useState<number>(() => loadSavedState('ocean_emptyInjectionThreshold', 0.1));
+  const [dswMin, setDswMin] = useState<number>(() => loadSavedState('ocean_dswMin', 41));
+  const [dswMax, setDswMax] = useState<number>(() => loadSavedState('ocean_dswMax', 45));
+  const [sswMin, setSswMin] = useState<number>(() => loadSavedState('ocean_sswMin', 70));
+  const [sswMax, setSswMax] = useState<number>(() => loadSavedState('ocean_sswMax', 80));
+  const [curveOffsets, setCurveOffsets] = useState<Record<string, number>>(() => loadSavedState('ocean_curveOffsets', {}));
 
   // Reset active page when filters change
   useEffect(() => {
@@ -99,11 +106,18 @@ export default function App() {
     localStorage.setItem('ocean_sampleSortOrder', JSON.stringify(sampleSortOrder));
     localStorage.setItem('ocean_selectedCurveId', JSON.stringify(selectedCurveId));
     localStorage.setItem('ocean_emptyInjectionThreshold', JSON.stringify(emptyInjectionThreshold));
+    localStorage.setItem('ocean_dswMin', JSON.stringify(dswMin));
+    localStorage.setItem('ocean_dswMax', JSON.stringify(dswMax));
+    localStorage.setItem('ocean_sswMin', JSON.stringify(sswMin));
+    localStorage.setItem('ocean_sswMax', JSON.stringify(sswMax));
+    localStorage.setItem('ocean_curveOffsets', JSON.stringify(curveOffsets));
+    localStorage.setItem('ocean_disabledCurves', JSON.stringify(disabledCurves));
+    localStorage.setItem('ocean_customStdUsedCs', JSON.stringify(customStdUsedCs));
   }, [
     currentStep, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
     excludedInjections, rejectedSamples, customSampleNames, sampleSortOrder, selectedCurveId,
-    emptyInjectionThreshold
+    emptyInjectionThreshold, dswMin, dswMax, sswMin, sswMax, curveOffsets, disabledCurves, customStdUsedCs
   ]);
 
 
@@ -297,6 +311,13 @@ export default function App() {
     setExcludedInjections({});
     setRejectedSamples({});
     setCustomSampleNames({});
+    setDisabledCurves({});
+    setCustomStdUsedCs({});
+    setDswMin(41);
+    setDswMax(45);
+    setSswMin(70);
+    setSswMax(80);
+    setCurveOffsets({});
     setCurrentStep(1);
 
     // Clean up localStorage to prevent lingering data
@@ -309,7 +330,8 @@ export default function App() {
       'ocean_sampleSortOrder', 'ocean_selectedCurveId', 'ocean_emptyInjectionThreshold',
       'ocean_anisotropyFactor', 'ocean_contourXAxis', 'ocean_minDepthFilter',
       'ocean_maxDepthFilter', 'ocean_minXFilter', 'ocean_maxXFilter', 'ocean_showBackgroundMap',
-      'ocean_chart_styles', 'ocean_visSettingsTab'
+      'ocean_chart_styles', 'ocean_visSettingsTab',
+      'ocean_dswMin', 'ocean_dswMax', 'ocean_sswMin', 'ocean_sswMax', 'ocean_curveOffsets', 'ocean_disabledCurves', 'ocean_customStdUsedCs'
     ];
     keys.forEach(k => localStorage.removeItem(k));
   };
@@ -510,17 +532,7 @@ export default function App() {
 
   // Identify standard curve blocks and fit curves
   const calibrationCurves = useMemo(() => {
-    const curves: {
-      id: string;
-      index: number;
-      name: string;
-      fileName: string;
-      standards: any[];
-      slope: number;
-      intercept: number;
-      rsq: number;
-    }[] = [];
-
+    const rawCurveBlocks: { fileName: string; standards: any[] }[] = [];
     let currentCurveStds: any[] = [];
     let currentCurveFile = '';
     let hadSamplesSinceLastStd = false;
@@ -537,20 +549,15 @@ export default function App() {
           currentCurveFile = group.fileName;
           hadSamplesSinceLastStd = false;
 
-          const curveId = `curve_${curves.length}`;
-          curves.push({
-            id: curveId,
-            index: curves.length,
-            name: `工作曲线 ${curves.length + 1} (${group.fileName.split('.')[0]})`,
+          rawCurveBlocks.push({
             fileName: group.fileName,
-            standards: currentCurveStds,
-            slope: 1,
-            intercept: 0,
-            rsq: 0
+            standards: currentCurveStds
           });
         } else {
           currentCurveStds.push(group);
-          curves[curves.length - 1].standards = currentCurveStds;
+          if (rawCurveBlocks.length > 0) {
+            rawCurveBlocks[rawCurveBlocks.length - 1].standards = currentCurveStds;
+          }
         }
       } else {
         // If it's a regular sample or seawater (not blank/MQ), we set the flag
@@ -560,21 +567,29 @@ export default function App() {
       }
     });
 
+    // Filter out curves with fewer than 3 standard points (likely drift checks/single-point standards)
+    const validCurveBlocks = rawCurveBlocks.filter(block => block.standards.length >= 3);
+
     // Fit each curve
-    return curves.map(curve => {
+    return validCurveBlocks.map((curveBlock, index) => {
+      const curveId = `curve_${index}`;
+      const name = `工作曲线 ${index + 1} (${curveBlock.fileName.split('.')[0]})`;
       const activePoints: { x: number; y: number }[] = [];
 
-      const detailedStandards = curve.standards.map((std, index) => {
-        let matchedUsedC = stdUsedC;
-        const cMatch = std.sampleName.match(/std\((\d+\.?\d*)uM/i);
-        if (cMatch) {
-          matchedUsedC = parseFloat(cMatch[1]);
+      const detailedStandards = curveBlock.standards.map((std, stdIndex) => {
+        const customC = customStdUsedCs[std.id];
+        let matchedUsedC = customC !== undefined ? customC : stdUsedC;
+        if (customC === undefined) {
+          const cMatch = std.sampleName.match(/std\((\d+\.?\d*)uM/i);
+          if (cMatch) {
+            matchedUsedC = parseFloat(cMatch[1]);
+          }
         }
 
-        const defaultDilution = dilutionFactors[index] || 3;
+        const defaultDilution = dilutionFactors[stdIndex] || 3;
         const currentDilution = customDilutions[std.id] !== undefined ? customDilutions[std.id] : defaultDilution;
         const theoreticalC = matchedUsedC / currentDilution;
-        const isEnabled = enabledStds[std.id] !== undefined ? enabledStds[std.id] : (index < dilutionFactors.length);
+        const isEnabled = enabledStds[std.id] !== undefined ? enabledStds[std.id] : (stdIndex < dilutionFactors.length);
 
         if (isEnabled) {
           activePoints.push({ x: theoreticalC, y: std.avArea });
@@ -582,27 +597,31 @@ export default function App() {
 
         return {
           id: std.id,
-          index,
+          index: stdIndex,
           sampleName: std.sampleName,
           avArea: std.avArea,
           dilution: currentDilution,
           theoreticalC,
           enabled: isEnabled,
-          group: std
+          group: std,
+          matchedUsedC
         };
       });
 
       const fit = fitCalibrationCurve(activePoints);
 
       return {
-        ...curve,
+        id: curveId,
+        index,
+        name,
+        fileName: curveBlock.fileName,
         standards: detailedStandards,
         slope: fit.slope,
         intercept: fit.intercept,
         rsq: fit.rsq
       };
     });
-  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds]);
+  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs]);
 
   // Active/selected calibration curve
   const activeCurve = useMemo(() => {
@@ -633,10 +652,13 @@ export default function App() {
     const map: Record<string, string> = {};
     if (calibrationCurves.length === 0) return map;
 
-    let lastCurveId = calibrationCurves[0].id;
+    const enabledCurves = calibrationCurves.filter(c => !disabledCurves[c.id]);
+    const activeCurves = enabledCurves.length > 0 ? enabledCurves : calibrationCurves;
+
+    let lastCurveId = activeCurves[0].id;
 
     sampleGroups.forEach((g) => {
-      const matchingCurve = calibrationCurves.find(c => c.standards.some(s => s.id === g.id));
+      const matchingCurve = activeCurves.find(c => c.standards.some(s => s.id === g.id));
       if (matchingCurve) {
         lastCurveId = matchingCurve.id;
       }
@@ -644,7 +666,7 @@ export default function App() {
     });
 
     return map;
-  }, [sampleGroups, calibrationCurves]);
+  }, [sampleGroups, calibrationCurves, disabledCurves]);
 
   // Compute final concentrations for all samples using their respective curves
   const processedSamples = useMemo(() => {
@@ -658,8 +680,9 @@ export default function App() {
 
       const slope = curve?.slope || 1;
       const intercept = curve?.intercept || 0;
+      const offset = curveOffsets[curveId] || 0;
 
-      const concentration = (g.avArea - intercept) / slope;
+      const concentration = (g.avArea - intercept) / slope + offset;
       const error = g.sdArea / slope;
 
       // Match station coordinates
@@ -678,7 +701,7 @@ export default function App() {
         botDepth: coordMatch?.botDepth
       };
     });
-  }, [sampleGroups, calibrationCurves, sampleToCurveMap, rejectedSamples, stationCoords]);
+  }, [sampleGroups, calibrationCurves, sampleToCurveMap, rejectedSamples, stationCoords, curveOffsets]);
 
   // Sort processed samples for list rendering & export
   const sortedProcessedSamples = useMemo(() => {
@@ -1146,43 +1169,6 @@ export default function App() {
                     ※ <strong>计算说明：</strong><code>使用浓度 = 储备液浓度 / 配置稀释倍数</code>。系统会自动在上述三者间进行联动计算。
                   </p>
 
-                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
-                    <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                      标准工作曲线 6个梯度稀释点 配置
-                    </h4>
-                    <div className="grid-3" style={{ gap: '12px' }}>
-                      {dilutionFactors.map((factor, index) => {
-                        const calculatedC = stdUsedC / factor;
-                        return (
-                          <div key={index} className="input-group" style={{ marginBottom: 0, padding: '10px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-                            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                              梯度点 {index + 1}
-                            </span>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>稀释倍数:</span>
-                              <input
-                                type="number"
-                                className="input-field"
-                                style={{ padding: '4px 8px', fontSize: '13px', flex: 1, minWidth: 0 }}
-                                value={factor}
-                                onChange={e => {
-                                  const val = parseFloat(e.target.value) || 0;
-                                  const newFactors = [...dilutionFactors];
-                                  newFactors[index] = val;
-                                  setDilutionFactors(newFactors);
-                                }}
-                                step="any"
-                              />
-                            </div>
-                            <div style={{ fontSize: '11px', color: 'var(--primary)', marginTop: '6px', fontWeight: 600 }}>
-                              理论浓度: {isNaN(calculatedC) || !isFinite(calculatedC) ? '0.00' : calculatedC.toFixed(2)} µmol/L
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px' }}>
                     <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)' }}>
                       智能数据清洗与“扎空”异常过滤
@@ -1233,20 +1219,66 @@ export default function App() {
               </div>
             </div>
 
-            {calibrationCurves.length > 1 && (
+            {calibrationCurves.length > 0 && (
               <div className="card mb-4" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', flexDirection: 'row' }}>
-                <span className="text-sm font-bold text-slate-700">检测到多条工作曲线，请选择要查看/配置的曲线：</span>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  {calibrationCurves.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => setSelectedCurveId(c.id)}
-                      className={`btn ${selectedCurveId === c.id ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{ padding: '6px 12px', fontSize: '13px', fontWeight: '600' }}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
+                <span className="text-sm font-bold text-slate-700">检测到工作曲线，请选择并管理曲线：</span>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  {calibrationCurves.map(c => {
+                    const isDisabled = disabledCurves[c.id];
+                    return (
+                      <div 
+                        key={c.id} 
+                        style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '6px', 
+                          backgroundColor: isDisabled ? '#f1f5f9' : '#fff', 
+                          padding: '4px 8px', 
+                          borderRadius: '8px', 
+                          border: `1px solid ${selectedCurveId === c.id ? 'var(--primary)' : '#cbd5e1'}`,
+                          opacity: isDisabled ? 0.75 : 1,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <button
+                          onClick={() => setSelectedCurveId(c.id)}
+                          className={`btn ${selectedCurveId === c.id ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{ 
+                            padding: '4px 10px', 
+                            fontSize: '12px', 
+                            fontWeight: '600',
+                            border: 'none',
+                            textDecoration: isDisabled ? 'line-through' : 'none',
+                            backgroundColor: selectedCurveId === c.id ? (isDisabled ? '#64748b' : 'var(--primary)') : 'transparent',
+                            color: selectedCurveId === c.id ? '#fff' : '#475569'
+                          }}
+                        >
+                          {c.name} {isDisabled && '(已停用)'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDisabledCurves(prev => ({
+                              ...prev,
+                              [c.id]: !prev[c.id]
+                            }));
+                          }}
+                          className="btn"
+                          style={{
+                            padding: '3px 8px',
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            backgroundColor: isDisabled ? '#10b981' : '#ef4444',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {isDisabled ? '恢复' : '停用'}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1353,7 +1385,31 @@ export default function App() {
                             style={{ cursor: 'pointer' }}
                           />
                         </td>
-                        <td className="font-semibold">{std.sampleName}</td>
+                        <td className="font-semibold">
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <span>{std.sampleName}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#64748b', fontWeight: 'normal' }}>
+                              <span>原液浓度:</span>
+                              <input
+                                type="number"
+                                value={std.matchedUsedC}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value);
+                                  if (!isNaN(val) && val >= 0) {
+                                    setCustomStdUsedCs(prev => ({
+                                      ...prev,
+                                      [std.id]: val
+                                    }));
+                                  }
+                                }}
+                                className="input-field"
+                                style={{ width: '65px', height: '22px', fontSize: '11px', padding: '2px 4px', margin: 0 }}
+                                step="any"
+                              />
+                              <span>µmol/L</span>
+                            </div>
+                          </div>
+                        </td>
                         <td>
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                             {std.group.injections.map((area: number, i: number) => {
@@ -1456,6 +1512,63 @@ export default function App() {
               </div>
             </div>
 
+            {/* DSW & SSW Reference Target Inputs */}
+            <div className="card mb-6" style={{ padding: '16px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Settings size={16} className="text-slate-500" />
+                  <span className="text-sm font-bold text-slate-700">参标质控浓度设定：</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className="text-xs text-slate-500">深海参标 (DSW) 范围:</span>
+                    <input
+                      type="number"
+                      className="input-field"
+                      style={{ width: '70px', padding: '4px 8px', fontSize: '13px', margin: 0 }}
+                      value={dswMin}
+                      onChange={e => setDswMin(parseFloat(e.target.value) || 0)}
+                      step="any"
+                    />
+                    <span className="text-xs text-slate-400">-</span>
+                    <input
+                      type="number"
+                      className="input-field"
+                      style={{ width: '70px', padding: '4px 8px', fontSize: '13px', margin: 0 }}
+                      value={dswMax}
+                      onChange={e => setDswMax(parseFloat(e.target.value) || 0)}
+                      step="any"
+                    />
+                    <span className="text-xs text-slate-500">µmol/L</span>
+                  </div>
+
+                  <div style={{ width: '1px', height: '16px', backgroundColor: '#e2e8f0' }} />
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className="text-xs text-slate-500">表层参标 (SSW) 范围:</span>
+                    <input
+                      type="number"
+                      className="input-field"
+                      style={{ width: '70px', padding: '4px 8px', fontSize: '13px', margin: 0 }}
+                      value={sswMin}
+                      onChange={e => setSswMin(parseFloat(e.target.value) || 0)}
+                      step="any"
+                    />
+                    <span className="text-xs text-slate-400">-</span>
+                    <input
+                      type="number"
+                      className="input-field"
+                      style={{ width: '70px', padding: '4px 8px', fontSize: '13px', margin: 0 }}
+                      value={sswMax}
+                      onChange={e => setSswMax(parseFloat(e.target.value) || 0)}
+                      step="any"
+                    />
+                    <span className="text-xs text-slate-500">µmol/L</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="grid-3 mb-6">
               <div className="card" style={{ padding: '16px 20px', margin: '0' }}>
                 <span className="text-xs text-slate-400 block font-semibold mb-1">Milli-Q 超纯水空白平均面积 (Av Blank)</span>
@@ -1469,9 +1582,9 @@ export default function App() {
               <div className="card" style={{ padding: '16px 20px', margin: '0' }}>
                 <span className="text-xs text-slate-400 block font-semibold mb-1 flex items-center gap-1">
                   <span>深海参标 (DSW) 平均浓度</span>
-                  <span className="text-[10px] text-slate-400 font-normal">(历史值 41-45 µmol/L)</span>
+                  <span className="text-[10px] text-slate-400 font-normal">(设定值 {dswMin}-{dswMax} µmol/L)</span>
                 </span>
-                <span className={`text-2xl font-bold font-display ${blanksAndSeawaters.avgDswConc >= 41 && blanksAndSeawaters.avgDswConc <= 45
+                <span className={`text-2xl font-bold font-display ${blanksAndSeawaters.avgDswConc >= dswMin && blanksAndSeawaters.avgDswConc <= dswMax
                     ? "text-emerald-500"
                     : "text-amber-500"
                   }`}>
@@ -1484,9 +1597,9 @@ export default function App() {
               <div className="card" style={{ padding: '16px 20px', margin: '0' }}>
                 <span className="text-xs text-slate-400 block font-semibold mb-1 flex items-center gap-1">
                   <span>表层参标 (SSW) 平均浓度</span>
-                  <span className="text-[10px] text-slate-400 font-normal">(历史值 70-80 µmol/L)</span>
+                  <span className="text-[10px] text-slate-400 font-normal">(设定值 {sswMin}-{sswMax} µmol/L)</span>
                 </span>
-                <span className={`text-2xl font-bold font-display ${blanksAndSeawaters.avgSswConc >= 70 && blanksAndSeawaters.avgSswConc <= 80
+                <span className={`text-2xl font-bold font-display ${blanksAndSeawaters.avgSswConc >= sswMin && blanksAndSeawaters.avgSswConc <= sswMax
                     ? "text-emerald-500"
                     : "text-amber-500"
                   }`}>
@@ -1510,8 +1623,9 @@ export default function App() {
                       <th>斜率 (Slope)</th>
                       <th>截距 (Intercept)</th>
                       <th>回归系数 (R²)</th>
-                      <th>DSW 参标均值 (41-45 µmol/L)</th>
-                      <th>SSW 参标均值 (70-80 µmol/L)</th>
+                      <th>DSW 参标均值 ({dswMin}-{dswMax} µmol/L)</th>
+                      <th>SSW 参标均值 ({sswMin}-{sswMax} µmol/L)</th>
+                      <th>浓度修正量 (µmol/L)</th>
                       <th>判定状态</th>
                       <th>操作</th>
                     </tr>
@@ -1525,8 +1639,8 @@ export default function App() {
                       const avgDsw = calculateMean(dsws.map(d => d.concentration));
                       const avgSsw = calculateMean(ssws.map(s => s.concentration));
                       
-                      const isDswOk = dsws.length === 0 || (avgDsw >= 41 && avgDsw <= 45);
-                      const isSswOk = ssws.length === 0 || (avgSsw >= 70 && avgSsw <= 80);
+                      const isDswOk = dsws.length === 0 || (avgDsw >= dswMin && avgDsw <= dswMax);
+                      const isSswOk = ssws.length === 0 || (avgSsw >= sswMin && avgSsw <= sswMax);
                       const status = isDswOk && isSswOk ? "合格" : "超标";
                       
                       return (
@@ -1545,6 +1659,20 @@ export default function App() {
                           </td>
                           <td className={!isSswOk ? "text-amber-600 font-bold" : "text-slate-700 font-medium"}>
                             {ssws.length > 0 ? `${avgSsw.toFixed(2)}` : "-"}
+                          </td>
+                          <td>
+                            <input
+                              type="number"
+                              className="input-field"
+                              style={{ width: '80px', padding: '4px 8px', fontSize: '13px', margin: 0, textAlign: 'center' }}
+                              value={curveOffsets[curve.id] || 0}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value) || 0;
+                                setCurveOffsets(prev => ({ ...prev, [curve.id]: val }));
+                              }}
+                              step="any"
+                              placeholder="0"
+                            />
                           </td>
                           <td>
                             <span className={`badge ${status === '合格' ? 'badge-success' : 'badge-warning'}`}>
@@ -1709,7 +1837,8 @@ export default function App() {
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                               {s.injections.map((area, i) => {
                                 const injNo = i + 1;
-                                const injConc = (area - intercept) / slope;
+                                const offset = curveOffsets[s.curveId] || 0;
+                                const injConc = (area - intercept) / slope + offset;
                                 return (
                                   <div 
                                     key={i}
@@ -1821,8 +1950,12 @@ export default function App() {
           const avgDsw = calculateMean(dsws.map(d => d.concentration));
           const avgSsw = calculateMean(ssws.map(s => s.concentration));
           
-          const isDswOk = dsws.length === 0 || (avgDsw >= 41 && avgDsw <= 45);
-          const isSswOk = ssws.length === 0 || (avgSsw >= 70 && avgSsw <= 80);
+          const currentCurveIndex = calibrationCurves.findIndex(c => c.id === activeQcModalCurveId);
+          const hasPrevCurve = currentCurveIndex > 0;
+          const hasNextCurve = currentCurveIndex < calibrationCurves.length - 1;
+
+          const isDswOk = dsws.length === 0 || (avgDsw >= dswMin && avgDsw <= dswMax);
+          const isSswOk = ssws.length === 0 || (avgSsw >= sswMin && avgSsw <= sswMax);
 
           return (
             <div 
@@ -1867,13 +2000,47 @@ export default function App() {
                     borderTopRightRadius: '12px'
                   }}
                 >
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
-                      {curve.name} - 批次数据质控审核
-                    </h3>
-                    <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#64748b' }}>
-                      文件：{curve.fileName}
-                    </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
+                        {curve.name} - 批次数据质控审核
+                      </h3>
+                      <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                        文件：{curve.fileName}
+                      </p>
+                    </div>
+
+                    {/* Navigation Buttons */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, margin: 0 }}
+                        disabled={!hasPrevCurve}
+                        onClick={() => {
+                          if (hasPrevCurve) {
+                            setActiveQcModalCurveId(calibrationCurves[currentCurveIndex - 1].id);
+                          }
+                        }}
+                        title="切换到上一条工作曲线"
+                      >
+                        <ChevronLeft size={14} />
+                        <span>上一条</span>
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, margin: 0 }}
+                        disabled={!hasNextCurve}
+                        onClick={() => {
+                          if (hasNextCurve) {
+                            setActiveQcModalCurveId(calibrationCurves[currentCurveIndex + 1].id);
+                          }
+                        }}
+                        title="切换到下一条工作曲线"
+                      >
+                        <span>下一条</span>
+                        <ChevronRight size={14} />
+                      </button>
+                    </div>
                   </div>
                   <button 
                     onClick={() => setActiveQcModalCurveId(null)}
@@ -1911,10 +2078,10 @@ export default function App() {
                     回归系数 (R²): <strong style={{ color: curve.rsq >= 0.99 ? 'var(--success)' : 'var(--danger)', fontFamily: 'monospace' }}>{curve.rsq.toFixed(6)}</strong>
                   </div>
                   <div style={{ fontSize: '13px', color: '#334155' }}>
-                    DSW 参标: <strong style={{ color: isDswOk ? 'var(--success)' : 'var(--warning)' }}>{dsws.length > 0 ? `${avgDsw.toFixed(2)} µmol/L` : '-'}</strong> (41-45)
+                    DSW 参标: <strong style={{ color: isDswOk ? 'var(--success)' : 'var(--warning)' }}>{dsws.length > 0 ? `${avgDsw.toFixed(2)} µmol/L` : '-'}</strong> ({dswMin}-{dswMax})
                   </div>
                   <div style={{ fontSize: '13px', color: '#334155' }}>
-                    SSW 参标: <strong style={{ color: isSswOk ? 'var(--success)' : 'var(--warning)' }}>{ssws.length > 0 ? `${avgSsw.toFixed(2)} µmol/L` : '-'}</strong> (70-80)
+                    SSW 参标: <strong style={{ color: isSswOk ? 'var(--success)' : 'var(--warning)' }}>{ssws.length > 0 ? `${avgSsw.toFixed(2)} µmol/L` : '-'}</strong> ({sswMin}-{sswMax})
                   </div>
                 </div>
 
@@ -1989,7 +2156,8 @@ export default function App() {
                               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                 {s.injections.map((area, i) => {
                                   const injNo = i + 1;
-                                  const injConc = (area - curve.intercept) / curve.slope;
+                                  const offset = curveOffsets[curve.id] || 0;
+                                  const injConc = (area - curve.intercept) / curve.slope + offset;
                                   return (
                                     <div 
                                       key={i}
