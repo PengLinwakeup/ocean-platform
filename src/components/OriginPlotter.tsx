@@ -24,6 +24,119 @@ const loadSavedState = <T,>(key: string, defaultValue: T): T => {
   }
 };
 
+function loessFilter(data: { x: number; y: number }[], bandwidth = 0.75) {
+  const sorted = [...data].sort((a, b) => a.y - b.y);
+  const n = sorted.length;
+  if (n < 3) return sorted;
+
+  return sorted.map((pt) => {
+    const targetY = pt.y;
+    const k = Math.max(3, Math.min(n, Math.round(n * bandwidth)));
+    const dists = sorted.map((p, i) => ({ dist: Math.abs(p.y - targetY), idx: i }));
+    dists.sort((a, b) => a.dist - b.dist);
+    const neighbors = dists.slice(0, k);
+    const maxDist = neighbors[neighbors.length - 1].dist || 1e-6;
+
+    let sumW = 0;
+    let sumWY = 0;
+    let sumWY2 = 0;
+    let sumWX = 0;
+    let sumWXY = 0;
+
+    neighbors.forEach(nb => {
+      const p = sorted[nb.idx];
+      const u = nb.dist / maxDist;
+      const w = u < 1 ? Math.pow(1 - Math.pow(u, 3), 3) : 0;
+      sumW += w;
+      sumWY += w * p.y;
+      sumWY2 += w * p.y * p.y;
+      sumWX += w * p.x;
+      sumWXY += w * p.x * p.y;
+    });
+
+    if (sumW < 1e-6) return pt;
+
+    const denom = sumW * sumWY2 - sumWY * sumWY;
+    if (Math.abs(denom) < 1e-6) {
+      return { x: sumWX / sumW, y: targetY };
+    }
+
+    const a = (sumW * sumWXY - sumWY * sumWX) / denom;
+    const b = (sumWX * sumWY2 - sumWY * sumWXY) / denom;
+    return { x: a * targetY + b, y: targetY };
+  });
+}
+
+const MULTI_COLORS = [
+  '#2563eb', // Royal Blue
+  '#dc2626', // Red
+  '#16a34a', // Green
+  '#d97706', // Yellow/Amber
+  '#9333ea', // Purple
+  '#0891b2', // Cyan
+  '#db2777', // Pink
+  '#ea580c', // Orange
+];
+
+const MULTI_SHAPES: ('circle' | 'square' | 'triangle' | 'diamond')[] = [
+  'circle',
+  'square',
+  'triangle',
+  'diamond',
+];
+
+const renderCustomPointShape = (cx: number, cy: number, size: number, fill: string, stroke: string, strokeWidth: number, shapeType: string) => {
+  if (shapeType === 'square') {
+    return (
+      <rect
+        x={cx - size/2}
+        y={cy - size/2}
+        width={size}
+        height={size}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
+      />
+    );
+  }
+  if (shapeType === 'triangle') {
+    const points = `${cx},${cy - size/2} ${cx - size/2},${cy + size/2} ${cx + size/2},${cy + size/2}`;
+    return (
+      <polygon
+        points={points}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
+      />
+    );
+  }
+  if (shapeType === 'diamond') {
+    const points = `${cx},${cy - size/2} ${cx + size/2},${cy} ${cx},${cy + size/2} ${cx - size/2},${cy}`;
+    return (
+      <polygon
+        points={points}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
+      />
+    );
+  }
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={size/2}
+      fill={fill}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
+    />
+  );
+};
+
 interface ChartStyles {
   fontFamily: string;
   fontSizeTitle: number;
@@ -55,14 +168,15 @@ interface ChartStyles {
   
   // 1D profile academic additions
   symbolShape: 'circle' | 'square' | 'triangle' | 'diamond';
-  lineType: 'straight' | 'smooth' | 'none';
-  lineSmoothness: number; // 0.0 to 1.0 (smoothness percentage)
+  lineType: 'straight' | 'smooth' | 'loess' | 'none';
+  lineSmoothness: number; // 0.0 to 1.0 (smoothness percentage / LOESS bandwidth)
   showErrorBar: boolean;
   errorBarCapWidth: number;
   errorBarColor: string;
   tickDirection1D: 'inward' | 'outward';
   show1DGridX: boolean;
   show1DGridY: boolean;
+  invertYAxis1D?: boolean;
 
   // Decoupled 1D Colors
   pointFill1D: string;
@@ -117,6 +231,10 @@ interface OriginPlotterProps {
 export default function OriginPlotter({ processedSamples, stationCoords }: OriginPlotterProps) {
   const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>(() => loadSavedState<'profile1d' | 'contour2d'>('ocean_visSubTab', 'profile1d'));
   const [selectedStation, setSelectedStation] = useState<string>(() => loadSavedState('ocean_selectedStation', ''));
+  const [stationMode1D, setStationMode1D] = useState<'single' | 'multi'>(() => loadSavedState<'single' | 'multi'>('ocean_stationMode1D', 'single'));
+  const [selectedStationsMulti, setSelectedStationsMulti] = useState<string[]>(() => loadSavedState<string[]>('ocean_selectedStationsMulti', []));
+  const [focusedStation1D, setFocusedStation1D] = useState<string>(() => loadSavedState('ocean_focusedStation1D', ''));
+  const [multiLayout1D, setMultiLayout1D] = useState<'overlay' | 'grid'>(() => loadSavedState<'overlay' | 'grid'>('ocean_multiLayout1D', 'overlay'));
   const [docMin, setDocMin] = useState<number>(() => loadSavedState('ocean_docMin', 40));
   const [docMax, setDocMax] = useState<number>(() => loadSavedState('ocean_docMax', 80));
   const [contourStep, setContourStep] = useState<number>(() => loadSavedState('ocean_contourStep', 5));
@@ -298,6 +416,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
   useEffect(() => {
     localStorage.setItem('ocean_visSubTab', JSON.stringify(visSubTab));
     localStorage.setItem('ocean_selectedStation', JSON.stringify(selectedStation));
+    localStorage.setItem('ocean_stationMode1D', JSON.stringify(stationMode1D));
+    localStorage.setItem('ocean_selectedStationsMulti', JSON.stringify(selectedStationsMulti));
+    localStorage.setItem('ocean_focusedStation1D', JSON.stringify(focusedStation1D));
+    localStorage.setItem('ocean_multiLayout1D', JSON.stringify(multiLayout1D));
     localStorage.setItem('ocean_docMin', JSON.stringify(docMin));
     localStorage.setItem('ocean_docMax', JSON.stringify(docMax));
     localStorage.setItem('ocean_contourStep', JSON.stringify(contourStep));
@@ -314,7 +436,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     localStorage.setItem('ocean_text_settings', JSON.stringify(textSettings));
     localStorage.setItem('ocean_legendPos', JSON.stringify(legendPos));
   }, [
-    visSubTab, selectedStation, docMin, docMax, contourStep, idwPower, anisotropyFactor,
+    visSubTab, selectedStation, stationMode1D, selectedStationsMulti, focusedStation1D, multiLayout1D, docMin, docMax, contourStep, idwPower, anisotropyFactor,
     contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, visSettingsTab, settingsTab1D, chartStyles, textSettings, legendPos
   ]);
 
@@ -326,24 +448,24 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     }));
   }, [contourXAxis]);
 
-  // Derive stations list and set default selected station
-  const stationsList = useMemo(() => {
-    return Array.from(new Set(processedSamples.map(g => g.station).filter(Boolean))) as string[];
+  // Derive stations list sorted naturally (e.g. S1, S2, S10)
+  const sortedStationsList = useMemo(() => {
+    const rawList = Array.from(new Set(processedSamples.map(g => g.station).filter(Boolean))) as string[];
+    return rawList.sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, ''), 10);
+      const numB = parseInt(b.replace(/\D/g, ''), 10);
+      if (isNaN(numA) || isNaN(numB)) {
+        return a.localeCompare(b);
+      }
+      return numA - numB;
+    });
   }, [processedSamples]);
 
   useEffect(() => {
-    if (!selectedStation && stationsList.length > 0) {
-      const sorted = [...stationsList].sort((a, b) => {
-        const numA = parseInt(a.replace(/\D/g, ''), 10);
-        const numB = parseInt(b.replace(/\D/g, ''), 10);
-        if (isNaN(numA) || isNaN(numB)) {
-          return a.localeCompare(b);
-        }
-        return numA - numB;
-      });
-      setSelectedStation(sorted[0]);
+    if (!selectedStation && sortedStationsList.length > 0) {
+      setSelectedStation(sortedStationsList[0]);
     }
-  }, [stationsList, selectedStation]);
+  }, [sortedStationsList, selectedStation]);
 
   // Compute data bounds
   const dataBounds = useMemo(() => {
@@ -379,10 +501,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       setMaxXFilter(dataBounds.maxLat);
     } else {
       setMinXFilter(0);
-      const count = stationsList.length;
+      const count = sortedStationsList.length;
       setMaxXFilter(count > 1 ? count - 1 : 1);
     }
-  }, [contourXAxis, dataBounds.minLon, dataBounds.maxLon, dataBounds.minLat, dataBounds.maxLat, stationsList.length]);
+  }, [contourXAxis, dataBounds.minLon, dataBounds.maxLon, dataBounds.minLat, dataBounds.maxLat, sortedStationsList.length]);
 
   // Unique coordinate mapping for station scatter maps
   const uniqueStationCoords = useMemo(() => {
@@ -421,6 +543,38 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       }))
       .sort((a, b) => a.depth - b.depth);
   }, [processedSamples, selectedStation]);
+
+  const lineData = useMemo(() => {
+    if (chartStyles.lineType === 'loess') {
+      return loessFilter(
+        chart1dData.map(d => ({ x: d.concentration, y: d.depth })),
+        chartStyles.lineSmoothness ?? 0.75
+      ).map(pt => ({
+        concentration: pt.x,
+        depth: pt.y
+      }));
+    }
+    return chart1dData;
+  }, [chart1dData, chartStyles.lineType, chartStyles.lineSmoothness]);
+
+  const sharedYDomain = useMemo(() => {
+    const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+    const validSamples = processedSamples.filter(s => activeStations.includes(s.station!) && s.depth !== null && !s.isRejected);
+    if (validSamples.length === 0) return [0, 1000];
+    const maxD = Math.max(...validSamples.map(s => s.depth as number));
+    return [0, Math.ceil(maxD / 100) * 100 + 100];
+  }, [processedSamples, selectedStationsMulti, selectedStation]);
+
+  const sharedXDomain = useMemo(() => {
+    const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+    const validSamples = processedSamples.filter(s => activeStations.includes(s.station!) && s.depth !== null && !s.isRejected);
+    if (validSamples.length === 0) return [0, 100];
+    const concs = validSamples.map(s => s.concentration);
+    const minC = Math.min(...concs);
+    const maxC = Math.max(...concs);
+    const padding = (maxC - minC) * 0.1 || 5;
+    return [Math.max(0, Math.floor((minC - padding) / 5) * 5), Math.ceil((maxC + padding) / 5) * 5];
+  }, [processedSamples, selectedStationsMulti, selectedStation]);
 
   // Canvas element state (callback ref to trigger draw when DOM mounts)
   const [canvasElement, setCanvasElement] = useState<HTMLCanvasElement | null>(null);
@@ -1308,22 +1462,109 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
                   <h3 className="card-title" style={{ margin: '0 0 4px 0' }}>站位地理分布图 (二维散点图)</h3>
-                  <p className="text-xs text-slate-400">点击地图中的测站标记或使用下方下拉框切换右侧深度剖面图</p>
+                  <p className="text-xs text-slate-400">点击地图中的测站标记或使用下方控制面板切换右侧深度剖面图</p>
+                </div>
+
+                {/* Single/Multi Mode Switcher */}
+                <div className="input-group" style={{ marginBottom: 0 }}>
+                  <label className="input-label" style={{ fontSize: '12px' }}>对比模式 (Comparison Mode)</label>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className={`btn ${stationMode1D === 'single' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ flex: 1, padding: '6px', fontSize: '12px', fontWeight: 'bold' }}
+                      onClick={() => setStationMode1D('single')}
+                    >
+                      单站模式
+                    </button>
+                    <button
+                      className={`btn ${stationMode1D === 'multi' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ flex: 1, padding: '6px', fontSize: '12px', fontWeight: 'bold' }}
+                      onClick={() => setStationMode1D('multi')}
+                    >
+                      多站对比
+                    </button>
+                  </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div className="input-group" style={{ marginBottom: 0 }}>
-                    <label className="input-label" style={{ fontSize: '12px' }}>选择目标站位</label>
-                    <select
-                      className="input-field font-semibold text-sm"
-                      value={selectedStation}
-                      onChange={e => setSelectedStation(e.target.value)}
-                    >
-                      {stationsList.map(st => (
-                        <option key={st} value={st}>{st}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {stationMode1D === 'single' ? (
+                    <div className="input-group" style={{ marginBottom: 0 }}>
+                      <label className="input-label" style={{ fontSize: '12px' }}>选择目标站位</label>
+                      <select
+                        className="input-field font-semibold text-sm"
+                        value={selectedStation}
+                        onChange={e => setSelectedStation(e.target.value)}
+                      >
+                        {sortedStationsList.map(st => (
+                          <option key={st} value={st}>{st}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label className="input-label" style={{ fontSize: '12px' }}>选择对比站位 (可多选)</label>
+                        <div style={{ maxHeight: '140px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: 'var(--bg-secondary)' }}>
+                          {sortedStationsList.map(st => {
+                            const isChecked = selectedStationsMulti.includes(st);
+                            return (
+                              <label key={st} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px', userSelect: 'none' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    if (isChecked) {
+                                      setSelectedStationsMulti(prev => prev.filter(x => x !== st));
+                                      if (focusedStation1D === st) setFocusedStation1D('');
+                                    } else {
+                                      setSelectedStationsMulti(prev => [...prev, st]);
+                                    }
+                                  }}
+                                />
+                                <span style={{ fontWeight: isChecked ? 'bold' : 'normal', color: isChecked ? '#0284c7' : 'inherit' }}>{st}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="input-group" style={{ marginBottom: 0 }}>
+                        <label className="input-label" style={{ fontSize: '11px' }}>对比布局方式 (Layout)</label>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            className={`btn ${multiLayout1D === 'overlay' ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ flex: 1, padding: '6px', fontSize: '11px', fontWeight: 'bold' }}
+                            onClick={() => setMultiLayout1D('overlay')}
+                          >
+                            单图叠加
+                          </button>
+                          <button
+                            className={`btn ${multiLayout1D === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
+                            style={{ flex: 1, padding: '6px', fontSize: '11px', fontWeight: 'bold' }}
+                            onClick={() => setMultiLayout1D('grid')}
+                          >
+                            小图并列
+                          </button>
+                        </div>
+                      </div>
+
+                      {multiLayout1D === 'overlay' && selectedStationsMulti.length > 0 && (
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <label className="input-label" style={{ fontSize: '11px' }}>高亮焦点站位 (Focus Station)</label>
+                          <select
+                            className="input-field font-semibold text-xs"
+                            value={focusedStation1D}
+                            onChange={e => setFocusedStation1D(e.target.value)}
+                          >
+                            <option value="">-- 无高亮 (全部等同显示) --</option>
+                            {selectedStationsMulti.map(st => (
+                              <option key={st} value={st}>{st}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {stationCoords.length === 0 ? (
@@ -1445,7 +1686,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                     <label className="input-label" style={{ fontSize: '10px' }}>连接线型 (Line)</label>
                     <select className="input-field" style={{ padding: '6px', fontSize: '11px' }} value={chartStyles.lineType} onChange={e => setChartStyles(prev => ({ ...prev, lineType: e.target.value as any }))}>
                       <option value="straight">直线折线 (Straight)</option>
-                      <option value="smooth">平滑插值 (Spline)</option>
+                      <option value="smooth">三次样条插值 (Spline)</option>
+                      <option value="loess">LOESS 局部回归平滑</option>
                       <option value="none">无连接线 (Symbol Only)</option>
                     </select>
                   </div>
@@ -1458,10 +1700,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   </div>
                 </div>
 
-                {chartStyles.lineType === 'smooth' && (
+                {(chartStyles.lineType === 'smooth' || chartStyles.lineType === 'loess') && (
                   <div className="input-group" style={{ marginTop: '8px', marginBottom: 0 }}>
                     <label className="input-label" style={{ fontSize: '10px', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>平滑程度 (Smoothness)</span>
+                      <span>{chartStyles.lineType === 'smooth' ? '平滑程度 (Smoothness)' : '拟合带宽比例 (Bandwidth)'}</span>
                       <span className="font-bold text-sky-600">{Math.round((chartStyles.lineSmoothness ?? 0.75) * 100)}%</span>
                     </label>
                     <input
@@ -1477,6 +1719,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 )}
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                  <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>
+                    <input type="checkbox" checked={chartStyles.invertYAxis1D ?? true} onChange={e => setChartStyles(prev => ({ ...prev, invertYAxis1D: e.target.checked }))} />
+                    <span>深度轴向底部递增 (Y-Axis Inverted)</span>
+                  </label>
                   <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>
                     <input type="checkbox" checked={chartStyles.showErrorBar} onChange={e => setChartStyles(prev => ({ ...prev, showErrorBar: e.target.checked }))} />
                     <span>开启数据误差棒 (Show Error Bars)</span>
@@ -1541,7 +1787,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 onDoubleClick={(e) => handleTextDoubleClick('title', e)}
                 title="双击直接编辑标题标题与样式"
               >
-                {selectedStation ? `${selectedStation} 站位 DOC 垂直剖面图` : textSettings.title.text}
+                {stationMode1D === 'single'
+                  ? (selectedStation ? `${selectedStation} 站位 DOC 垂直剖面图` : textSettings.title.text)
+                  : `多站对比 DOC 垂直剖面图 (${selectedStationsMulti.length > 0 ? selectedStationsMulti.join(', ') : '无'})`
+                }
               </h3>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
@@ -1564,10 +1813,143 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
             </div>
 
             {/* 1D Plot Container */}
-            <div ref={chart1dContainerRef} style={{ width: '100%', height: '400px', position: 'relative' }}>
-              {chart1dData.length === 0 ? (
-                <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
-                  该站位没有可绘制的深度数据点
+            <div ref={chart1dContainerRef} style={{ width: '100%', minHeight: '400px', height: (stationMode1D === 'multi' && multiLayout1D === 'grid') ? 'auto' : '400px', position: 'relative', overflowY: 'auto' }}>
+              {(stationMode1D === 'single' ? chart1dData.length === 0 : selectedStationsMulti.length === 0) ? (
+                <div style={{ height: '400px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
+                  {stationMode1D === 'single' ? '该站位没有可绘制的深度数据点' : '请在左侧多选需要对比的站位'}
+                </div>
+              ) : (stationMode1D === 'multi' && multiLayout1D === 'grid') ? (
+                /* Small Multiples Grid Layout */
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                  gap: '16px',
+                  width: '100%',
+                  padding: '8px'
+                }}>
+                  {(() => {
+                    const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                    return activeStations.map((st, idx) => {
+                      const stData = processedSamples
+                        .filter(s => s.station === st && s.depth !== null && !s.isRejected)
+                        .map(s => ({
+                          depth: s.depth as number,
+                          concentration: parseFloat(s.concentration.toFixed(2)),
+                          error: parseFloat(s.error.toFixed(2)),
+                          sampleName: s.sampleName,
+                          rsd: s.rsd
+                        }))
+                        .sort((a, b) => a.depth - b.depth);
+
+                      if (stData.length === 0) {
+                        return (
+                          <div key={st} className="card" style={{ height: '260px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8', fontSize: '12px' }}>
+                            {st} 站无数据
+                          </div>
+                        );
+                      }
+
+                      const fill = MULTI_COLORS[idx % MULTI_COLORS.length];
+                      const shapeType = MULTI_SHAPES[idx % MULTI_SHAPES.length];
+                      
+                      const stLineData = chartStyles.lineType === 'loess'
+                        ? loessFilter(stData.map(d => ({ x: d.concentration, y: d.depth })), chartStyles.lineSmoothness ?? 0.75).map(pt => ({
+                            concentration: pt.x,
+                            depth: pt.y
+                          }))
+                        : stData;
+
+                      return (
+                        <div key={st} style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '4px', border: '1px solid #cbd5e1', borderRadius: '8px', backgroundColor: '#ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', paddingBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155' }}>测站: {st}</span>
+                            <span style={{ fontSize: '10px', color: '#64748b' }}>({stData.length}点)</span>
+                          </div>
+                          <div style={{ width: '100%', height: '220px', position: 'relative' }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <ScatterChart margin={{ top: 25, right: 15, bottom: 5, left: 10 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridStroke1D || '#cbd5e1'} vertical={chartStyles.show1DGridX} horizontal={chartStyles.show1DGridY} />
+                                <XAxis
+                                  type="number"
+                                  dataKey="concentration"
+                                  name="浓度"
+                                  unit=" µmol/L"
+                                  stroke={chartStyles.axisStroke1D || '#475569'}
+                                  fontSize={9}
+                                  fontWeight="600"
+                                  domain={sharedXDomain}
+                                  orientation="top"
+                                  axisLine={{ stroke: chartStyles.axisStroke1D }}
+                                  tickLine={{ stroke: chartStyles.axisStroke1D }}
+                                  tickSize={chartStyles.tickDirection1D === 'inward' ? -4 : 4}
+                                />
+                                <YAxis
+                                  type="number"
+                                  dataKey="depth"
+                                  name="深度"
+                                  unit=" m"
+                                  stroke={chartStyles.axisStroke1D || '#475569'}
+                                  fontSize={9}
+                                  fontWeight="600"
+                                  reversed={chartStyles.invertYAxis1D ?? true}
+                                  domain={sharedYDomain}
+                                  axisLine={{ stroke: chartStyles.axisStroke1D }}
+                                  tickLine={{ stroke: chartStyles.axisStroke1D }}
+                                  tickSize={chartStyles.tickDirection1D === 'inward' ? -4 : 4}
+                                />
+                                <Tooltip
+                                  cursor={{ stroke: '#94a3b8', strokeWidth: 1, strokeDasharray: '4 4' }}
+                                  contentStyle={{
+                                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                                    borderRadius: '6px',
+                                    border: '1px solid #e2e8f0',
+                                    fontSize: '11px',
+                                    padding: '6px'
+                                  }}
+                                  formatter={(value, name) => {
+                                    if (name === "浓度") return [`${value} µmol/L`, "DOC 浓度"];
+                                    if (name === "深度") return [`${value} m`, "测量深度"];
+                                    return [value, name];
+                                  }}
+                                />
+                                {chartStyles.lineType !== 'none' && (
+                                  <Scatter
+                                    name="连线"
+                                    data={stLineData}
+                                    fill="none"
+                                    line={{ stroke: fill, strokeWidth: chartStyles.lineWidth || 2, type: curveType }}
+                                    shape={() => <path d="" />}
+                                    legendType="none"
+                                  />
+                                )}
+                                <Scatter
+                                  name={st}
+                                  data={stData}
+                                  fill="none"
+                                  shape={(props: any) => {
+                                    const { cx, cy } = props;
+                                    const size = (chartStyles.pointRadius * 2 || 10) * 0.9;
+                                    const stroke = '#ffffff';
+                                    return renderCustomPointShape(cx, cy, size, fill, stroke, 1.2, shapeType);
+                                  }}
+                                >
+                                  {chartStyles.showErrorBar && (
+                                    <ErrorBar
+                                      dataKey="error"
+                                      direction="x"
+                                      stroke={chartStyles.errorBarColor || '#94a3b8'}
+                                      strokeWidth={1}
+                                      width={chartStyles.errorBarCapWidth || 4}
+                                    />
+                                  )}
+                                </Scatter>
+                              </ScatterChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               ) : (
                 <>
@@ -1602,7 +1984,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                         stroke={chartStyles.axisStroke1D || '#475569'}
                         fontSize={11}
                         fontWeight="600"
-                        reversed
+                        reversed={chartStyles.invertYAxis1D ?? true}
                         domain={[0, 'dataMax + 100']}
                         axisLine={{ stroke: chartStyles.axisStroke1D }}
                         tickLine={{ stroke: chartStyles.axisStroke1D }}
@@ -1623,177 +2005,341 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                           return [value, name];
                         }}
                       />
-                      <Scatter
-                        name="DOC 测定值"
-                        data={chart1dData}
-                        fill="none"
-                        line={chartStyles.lineType === 'none' ? false : { stroke: chartStyles.lineStroke1D || '#2563eb', strokeWidth: chartStyles.lineWidth || 2, type: curveType }}
-                        shape={(props: any) => {
-                          const { cx, cy } = props;
-                          const size = chartStyles.pointRadius * 2 || 10;
-                          const fill = chartStyles.pointFill1D || '#2563eb';
-                          const stroke = chartStyles.pointStroke1D || '#ffffff';
-                          const strokeWidth = chartStyles.pointStrokeWidth || 1.5;
-                          const shapeType = chartStyles.symbolShape || 'circle';
-
-                          if (shapeType === 'square') {
-                            return (
-                              <rect
-                                x={cx - size/2}
-                                y={cy - size/2}
-                                width={size}
-                                height={size}
-                                fill={fill}
-                                stroke={stroke}
-                                strokeWidth={strokeWidth}
-                                style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
-                              />
-                            );
-                          }
-                          if (shapeType === 'triangle') {
-                            const points = `${cx},${cy - size/2} ${cx - size/2},${cy + size/2} ${cx + size/2},${cy + size/2}`;
-                            return (
-                              <polygon
-                                points={points}
-                                fill={fill}
-                                stroke={stroke}
-                                strokeWidth={strokeWidth}
-                                style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
-                              />
-                            );
-                          }
-                          if (shapeType === 'diamond') {
-                            const points = `${cx},${cy - size/2} ${cx + size/2},${cy} ${cx},${cy + size/2} ${cx - size/2},${cy}`;
-                            return (
-                              <polygon
-                                points={points}
-                                fill={fill}
-                                stroke={stroke}
-                                strokeWidth={strokeWidth}
-                                style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
-                              />
-                            );
-                          }
-                          return (
-                            <circle
-                              cx={cx}
-                              cy={cy}
-                              r={chartStyles.pointRadius || 5}
-                              fill={fill}
-                              stroke={stroke}
-                              strokeWidth={strokeWidth}
-                              style={{ filter: `drop-shadow(0px 2px 4px ${fill}40)` }}
+                      
+                      {stationMode1D === 'single' ? (
+                        <>
+                          {chartStyles.lineType !== 'none' && (
+                            <Scatter
+                              name="DOC 连线"
+                              data={lineData}
+                              fill="none"
+                              line={{ stroke: chartStyles.lineStroke1D || '#2563eb', strokeWidth: chartStyles.lineWidth || 2, type: curveType }}
+                              shape={() => <path d="" />}
+                              legendType="none"
                             />
-                          );
-                        }}
-                      >
-                        {chartStyles.showErrorBar && (
-                          <ErrorBar
-                            dataKey="error"
-                            direction="x"
-                            stroke={chartStyles.errorBarColor || '#94a3b8'}
-                            strokeWidth={1}
-                            width={chartStyles.errorBarCapWidth || 4}
-                          />
-                        )}
-                      </Scatter>
+                          )}
+                          <Scatter
+                            name="DOC 测定值"
+                            data={chart1dData}
+                            fill="none"
+                            shape={(props: any) => {
+                              const { cx, cy } = props;
+                              const size = chartStyles.pointRadius * 2 || 10;
+                              const fill = chartStyles.pointFill1D || '#2563eb';
+                              const stroke = chartStyles.pointStroke1D || '#ffffff';
+                              const strokeWidth = chartStyles.pointStrokeWidth || 1.5;
+                              const shapeType = chartStyles.symbolShape || 'circle';
+                              return renderCustomPointShape(cx, cy, size, fill, stroke, strokeWidth, shapeType);
+                            }}
+                          >
+                            {chartStyles.showErrorBar && (
+                              <ErrorBar
+                                dataKey="error"
+                                direction="x"
+                                stroke={chartStyles.errorBarColor || '#94a3b8'}
+                                strokeWidth={1}
+                                width={chartStyles.errorBarCapWidth || 4}
+                              />
+                            )}
+                          </Scatter>
+                        </>
+                      ) : (
+                        (() => {
+                          const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                          return activeStations.flatMap((st, idx) => {
+                            const stData = processedSamples
+                              .filter(s => s.station === st && s.depth !== null && !s.isRejected)
+                              .map(s => ({
+                                depth: s.depth as number,
+                                concentration: parseFloat(s.concentration.toFixed(2)),
+                                error: parseFloat(s.error.toFixed(2)),
+                                sampleName: s.sampleName,
+                                rsd: s.rsd
+                              }))
+                              .sort((a, b) => a.depth - b.depth);
+
+                            if (stData.length === 0) return [];
+
+                            const isFocused = focusedStation1D === st;
+                            const isAnyFocused = focusedStation1D !== '';
+                            const isDimmed = isAnyFocused && !isFocused;
+                            
+                            const fill = isDimmed ? '#e2e8f0' : MULTI_COLORS[idx % MULTI_COLORS.length];
+                            const stroke = isDimmed ? '#f1f5f9' : '#ffffff';
+                            const opacity = isDimmed ? 0.35 : 1.0;
+                            const lineWidth = isFocused ? 3.5 : (isDimmed ? 1.0 : (chartStyles.lineWidth || 2));
+                            const shapeType = MULTI_SHAPES[idx % MULTI_SHAPES.length];
+                            
+                            const stLineData = chartStyles.lineType === 'loess'
+                              ? loessFilter(stData.map(d => ({ x: d.concentration, y: d.depth })), chartStyles.lineSmoothness ?? 0.75).map(pt => ({
+                                  concentration: pt.x,
+                                  depth: pt.y
+                                }))
+                              : stData;
+
+                            return [
+                              ...(chartStyles.lineType !== 'none' ? [
+                                <Scatter
+                                  key={`${st}-line`}
+                                  name={`${st} 连线`}
+                                  data={stLineData}
+                                  fill="none"
+                                  line={{ stroke: fill, strokeWidth: lineWidth, type: curveType }}
+                                  shape={() => <path d="" />}
+                                  legendType="none"
+                                  opacity={opacity}
+                                />
+                              ] : []),
+                              <Scatter
+                                key={`${st}-points`}
+                                name={st}
+                                data={stData}
+                                fill="none"
+                                opacity={opacity}
+                                shape={(props: any) => {
+                                  const { cx, cy } = props;
+                                  const size = chartStyles.pointRadius * 2 || 10;
+                                  return renderCustomPointShape(cx, cy, size, fill, stroke, 1.5, shapeType);
+                                }}
+                              >
+                                {chartStyles.showErrorBar && (
+                                  <ErrorBar
+                                    dataKey="error"
+                                    direction="x"
+                                    stroke={isDimmed ? '#cbd5e1' : (chartStyles.errorBarColor || '#94a3b8')}
+                                    strokeWidth={isFocused ? 1.5 : 1}
+                                    width={chartStyles.errorBarCapWidth || 4}
+                                  />
+                                )}
+                              </Scatter>
+                            ];
+                          });
+                        })()
+                      )}
 
                       {/* Render Legend directly inside SVG for export compatibility */}
                       <g
                         transform={`translate(${legendPos.x}, ${legendPos.y})`}
                         style={{ cursor: legendDragging ? 'grabbing' : 'grab', userSelect: 'none' }}
                         onMouseDown={handleLegendMouseDown}
-                        onDoubleClick={(e) => handleTextDoubleClick('legendLabel', e)}
                       >
-                        {/* Legend Background Box */}
-                        <rect
-                          width={Math.max(120, 36 + textSettings.legendLabel.text.length * 8 + 12)}
-                          height={30}
-                          fill="rgba(255, 255, 255, 0.95)"
-                          stroke="#cbd5e1"
-                          strokeWidth={1}
-                          rx={6}
-                          ry={6}
-                        />
-                        {/* Legend Line symbol */}
-                        {chartStyles.lineType !== 'none' && (
-                          <line
-                            x1={8}
-                            y1={15}
-                            x2={24}
-                            y2={15}
-                            stroke={chartStyles.lineStroke1D || '#2563eb'}
-                            strokeWidth={chartStyles.lineWidth || 2}
-                          />
-                        )}
-                        {/* Legend Point symbol matching the actual shape, color, and size! */}
-                        {(() => {
-                          const cx = 16;
-                          const cy = 15;
-                          const fill = chartStyles.pointFill1D || '#2563eb';
-                          const stroke = chartStyles.pointStroke1D || '#ffffff';
-                          const strokeWidth = 1.5;
-                          const shapeType = chartStyles.symbolShape || 'circle';
-                          const size = 8; // Standard size for visual neatness inside the legend box
-
-                          if (shapeType === 'square') {
-                            return (
-                              <rect
-                                x={cx - size/2}
-                                y={cy - size/2}
-                                width={size}
-                                height={size}
-                                fill={fill}
-                                stroke={stroke}
-                                strokeWidth={strokeWidth}
-                              />
-                            );
-                          }
-                          if (shapeType === 'triangle') {
-                            const points = `${cx},${cy - size/2} ${cx - size/2},${cy + size/2} ${cx + size/2},${cy + size/2}`;
-                            return (
-                              <polygon
-                                points={points}
-                                fill={fill}
-                                stroke={stroke}
-                                strokeWidth={strokeWidth}
-                              />
-                            );
-                          }
-                          if (shapeType === 'diamond') {
-                            const points = `${cx},${cy - size/2} ${cx + size/2},${cy} ${cx},${cy + size/2} ${cx - size/2},${cy}`;
-                            return (
-                              <polygon
-                                points={points}
-                                fill={fill}
-                                stroke={stroke}
-                                strokeWidth={strokeWidth}
-                              />
-                            );
-                          }
-                          return (
-                            <circle
-                              cx={cx}
-                              cy={cy}
-                              r={size/2}
-                              fill={fill}
-                              stroke={stroke}
-                              strokeWidth={strokeWidth}
+                        {stationMode1D === 'single' ? (
+                          <>
+                            {/* Legend Background Box */}
+                            <rect
+                              width={Math.max(120, 36 + textSettings.legendLabel.text.length * 8 + 12)}
+                              height={30}
+                              fill="rgba(255, 255, 255, 0.95)"
+                              stroke="#cbd5e1"
+                              strokeWidth={1}
+                              rx={6}
+                              ry={6}
                             />
-                          );
-                        })()}
-                        {/* Legend Text */}
-                        <text
-                          x={30}
-                          y={19}
-                          fontFamily={textSettings.legendLabel.fontFamily}
-                          fontSize={`${textSettings.legendLabel.fontSize}px`}
-                          fill={textSettings.legendLabel.color}
-                          fontWeight={textSettings.legendLabel.fontWeight}
-                          fontStyle={textSettings.legendLabel.fontStyle}
-                        >
-                          {textSettings.legendLabel.text}
-                        </text>
+                            {/* Legend Line symbol */}
+                            {chartStyles.lineType !== 'none' && (
+                              <line
+                                x1={8}
+                                y1={15}
+                                x2={24}
+                                y2={15}
+                                stroke={chartStyles.lineStroke1D || '#2563eb'}
+                                strokeWidth={chartStyles.lineWidth || 2}
+                              />
+                            )}
+                            {/* Legend Point symbol matching the actual shape, color, and size! */}
+                            {(() => {
+                              const cx = 16;
+                              const cy = 15;
+                              const fill = chartStyles.pointFill1D || '#2563eb';
+                              const stroke = chartStyles.pointStroke1D || '#ffffff';
+                              const strokeWidth = 1.5;
+                              const shapeType = chartStyles.symbolShape || 'circle';
+                              const size = 8;
+
+                              if (shapeType === 'square') {
+                                return (
+                                  <rect
+                                    x={cx - size/2}
+                                    y={cy - size/2}
+                                    width={size}
+                                    height={size}
+                                    fill={fill}
+                                    stroke={stroke}
+                                    strokeWidth={strokeWidth}
+                                  />
+                                );
+                              }
+                              if (shapeType === 'triangle') {
+                                const points = `${cx},${cy - size/2} ${cx - size/2},${cy + size/2} ${cx + size/2},${cy + size/2}`;
+                                return (
+                                  <polygon
+                                    points={points}
+                                    fill={fill}
+                                    stroke={stroke}
+                                    strokeWidth={strokeWidth}
+                                  />
+                                );
+                              }
+                              if (shapeType === 'diamond') {
+                                const points = `${cx},${cy - size/2} ${cx + size/2},${cy} ${cx},${cy + size/2} ${cx - size/2},${cy}`;
+                                return (
+                                  <polygon
+                                    points={points}
+                                    fill={fill}
+                                    stroke={stroke}
+                                    strokeWidth={strokeWidth}
+                                  />
+                                );
+                              }
+                              return (
+                                <circle
+                                  cx={cx}
+                                  cy={cy}
+                                  r={size/2}
+                                  fill={fill}
+                                  stroke={stroke}
+                                  strokeWidth={strokeWidth}
+                                />
+                              );
+                            })()}
+                            {/* Legend Text */}
+                            <text
+                              x={30}
+                              y={19}
+                              fontFamily={textSettings.legendLabel.fontFamily}
+                              fontSize={`${textSettings.legendLabel.fontSize}px`}
+                              fill={textSettings.legendLabel.color}
+                              fontWeight={textSettings.legendLabel.fontWeight}
+                              fontStyle={textSettings.legendLabel.fontStyle}
+                              onDoubleClick={(e) => handleTextDoubleClick('legendLabel', e)}
+                              style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                            >
+                              {textSettings.legendLabel.text}
+                            </text>
+                          </>
+                        ) : (
+                          <>
+                            {/* Multi station legend box */}
+                            {(() => {
+                              const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                              const itemHeight = 22;
+                              const padding = 10;
+                              const boxHeight = padding * 2 + activeStations.length * itemHeight;
+                              
+                              let maxLabelWidth = 0;
+                              activeStations.forEach(st => {
+                                if (st.length > maxLabelWidth) maxLabelWidth = st.length;
+                              });
+                              const boxWidth = Math.max(140, 36 + maxLabelWidth * 8 + 12);
+
+                              return (
+                                <>
+                                  <rect
+                                    width={boxWidth}
+                                    height={boxHeight}
+                                    fill="rgba(255, 255, 255, 0.95)"
+                                    stroke="#cbd5e1"
+                                    strokeWidth={1}
+                                    rx={6}
+                                    ry={6}
+                                  />
+                                  {activeStations.map((st, idx) => {
+                                    const yPos = padding + idx * itemHeight + itemHeight / 2;
+                                    
+                                    const isFocused = focusedStation1D === st;
+                                    const isAnyFocused = focusedStation1D !== '';
+                                    const isDimmed = isAnyFocused && !isFocused;
+                                    
+                                    const fill = isDimmed ? '#e2e8f0' : MULTI_COLORS[idx % MULTI_COLORS.length];
+                                    const shapeType = MULTI_SHAPES[idx % MULTI_SHAPES.length];
+                                    const size = 8;
+                                    const cx = 16;
+                                    const cy = yPos;
+                                    const stroke = isDimmed ? '#cbd5e1' : '#ffffff';
+                                    const strokeWidth = 1;
+                                    const opacity = isDimmed ? 0.35 : 1.0;
+
+                                    return (
+                                      <g
+                                        key={st}
+                                        style={{ cursor: 'pointer', opacity }}
+                                        onClick={() => setFocusedStation1D(focusedStation1D === st ? '' : st)}
+                                      >
+                                        {chartStyles.lineType !== 'none' && (
+                                          <line
+                                            x1={8}
+                                            y1={yPos}
+                                            x2={24}
+                                            y2={yPos}
+                                            stroke={fill}
+                                            strokeWidth={isFocused ? 3.5 : (chartStyles.lineWidth || 2)}
+                                          />
+                                        )}
+                                        {(() => {
+                                          if (shapeType === 'square') {
+                                            return (
+                                              <rect
+                                                x={cx - size/2}
+                                                y={cy - size/2}
+                                                width={size}
+                                                height={size}
+                                                fill={fill}
+                                                stroke={stroke}
+                                                strokeWidth={strokeWidth}
+                                              />
+                                            );
+                                          }
+                                          if (shapeType === 'triangle') {
+                                            const points = `${cx},${cy - size/2} ${cx - size/2},${cy + size/2} ${cx + size/2},${cy + size/2}`;
+                                            return (
+                                              <polygon
+                                                points={points}
+                                                fill={fill}
+                                                stroke={stroke}
+                                                strokeWidth={strokeWidth}
+                                              />
+                                            );
+                                          }
+                                          if (shapeType === 'diamond') {
+                                            const points = `${cx},${cy - size/2} ${cx + size/2},${cy} ${cx},${cy + size/2} ${cx - size/2},${cy}`;
+                                            return (
+                                              <polygon
+                                                points={points}
+                                                fill={fill}
+                                                stroke={stroke}
+                                                strokeWidth={strokeWidth}
+                                              />
+                                            );
+                                          }
+                                          return (
+                                            <circle
+                                              cx={cx}
+                                              cy={cy}
+                                              r={size/2}
+                                              fill={fill}
+                                              stroke={stroke}
+                                              strokeWidth={strokeWidth}
+                                            />
+                                          );
+                                        })()}
+                                        <text
+                                          x={30}
+                                          y={yPos + 4}
+                                          fontFamily={textSettings.legendLabel.fontFamily}
+                                          fontSize={`${textSettings.legendLabel.fontSize}px`}
+                                          fill={isFocused ? "#0284c7" : "#0f172a"}
+                                          fontWeight={isFocused ? "bold" : "600"}
+                                        >
+                                          {st}
+                                        </text>
+                                      </g>
+                                    );
+                                  })}
+                                </>
+                              );
+                            })()}
+                          </>
+                        )}
                       </g>
                     </ScatterChart>
                   </ResponsiveContainer>
@@ -2010,32 +2556,69 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                       </div>
                     </div>
 
-                    <div className="grid-2" style={{ gap: '8px' }}>
-                      <div className="input-group" style={{ marginBottom: 0 }}>
-                        <label className="input-label" style={{ fontSize: '11px' }}>
-                          {contourXAxis === 'station' ? '最小站位索引' : contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
-                        </label>
-                        <input
-                          type="number"
-                          className="input-field"
-                          style={{ padding: '6px' }}
-                          value={minXFilter}
-                          onChange={e => setMinXFilter(parseFloat(e.target.value) || 0)}
-                        />
+                    {contourXAxis === 'station' ? (
+                      <div className="grid-2" style={{ gap: '8px' }}>
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <label className="input-label" style={{ fontSize: '11px' }}>起始站位</label>
+                          <select
+                            className="input-field font-semibold text-xs"
+                            style={{ padding: '6px' }}
+                            value={sortedStationsList[Math.max(0, Math.min(sortedStationsList.length - 1, Math.round(minXFilter)))] || ''}
+                            onChange={e => {
+                              const idx = sortedStationsList.indexOf(e.target.value);
+                              if (idx !== -1) setMinXFilter(idx);
+                            }}
+                          >
+                            {sortedStationsList.map(st => (
+                              <option key={st} value={st}>{st}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <label className="input-label" style={{ fontSize: '11px' }}>结束站位</label>
+                          <select
+                            className="input-field font-semibold text-xs"
+                            style={{ padding: '6px' }}
+                            value={sortedStationsList[Math.max(0, Math.min(sortedStationsList.length - 1, Math.round(maxXFilter)))] || ''}
+                            onChange={e => {
+                              const idx = sortedStationsList.indexOf(e.target.value);
+                              if (idx !== -1) setMaxXFilter(idx);
+                            }}
+                          >
+                            {sortedStationsList.map(st => (
+                              <option key={st} value={st}>{st}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
-                      <div className="input-group" style={{ marginBottom: 0 }}>
-                        <label className="input-label" style={{ fontSize: '11px' }}>
-                          {contourXAxis === 'station' ? '最大站位索引' : contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
-                        </label>
-                        <input
-                          type="number"
-                          className="input-field"
-                          style={{ padding: '6px' }}
-                          value={maxXFilter}
-                          onChange={e => setMaxXFilter(parseFloat(e.target.value) || 0)}
-                        />
+                    ) : (
+                      <div className="grid-2" style={{ gap: '8px' }}>
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <label className="input-label" style={{ fontSize: '11px' }}>
+                            {contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
+                          </label>
+                          <input
+                            type="number"
+                            className="input-field"
+                            style={{ padding: '6px' }}
+                            value={minXFilter}
+                            onChange={e => setMinXFilter(parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+                        <div className="input-group" style={{ marginBottom: 0 }}>
+                          <label className="input-label" style={{ fontSize: '11px' }}>
+                            {contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
+                          </label>
+                          <input
+                            type="number"
+                            className="input-field"
+                            style={{ padding: '6px' }}
+                            value={maxXFilter}
+                            onChange={e => setMaxXFilter(parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
               )}
