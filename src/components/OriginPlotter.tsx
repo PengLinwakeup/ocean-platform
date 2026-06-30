@@ -187,6 +187,9 @@ interface ChartStyles {
   lineStroke1D: string;
   gridStroke1D: string;
   axisStroke1D: string;
+  yAxisTitleOffset?: number;
+  xAxisTitleOffset?: number;
+  colorbarTitleOffset?: number;
 }
 
 interface TextSetting {
@@ -252,8 +255,109 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
   const [visSettingsTab, setVisSettingsTab] = useState<'data' | 'style'>(() => loadSavedState('ocean_visSettingsTab', 'data'));
   const [settingsTab1D, setSettingsTab1D] = useState<'select' | 'style'>(() => loadSavedState<'select' | 'style'>('ocean_settingsTab1D', 'select'));
   const [stationSortMode1D, setStationSortMode1D] = useState<'name' | 'latitude' | 'longitude'>(() => loadSavedState<'name' | 'latitude' | 'longitude'>('ocean_stationSortMode1D', 'name'));
-  const [contourStartStation, setContourStartStation] = useState<string>('');
-  const [contourEndStation, setContourEndStation] = useState<string>('');
+  const [contourStartStation, setContourStartStation] = useState<string>(() => loadSavedState('ocean_contourStartStation', ''));
+  const [contourEndStation, setContourEndStation] = useState<string>(() => loadSavedState('ocean_contourEndStation', ''));
+
+  // Custom templates/presets state for preserving work steps
+  const [customPresets, setCustomPresets] = useState<{
+    id: string;
+    name: string;
+    timestamp: string;
+    visSubTab: 'profile1d' | 'contour2d';
+    docMin: number;
+    docMax: number;
+    contourStep: number;
+    idwPower: number;
+    anisotropyFactor: number;
+    contourXAxis: 'station' | 'longitude' | 'latitude';
+    minDepthFilter: number;
+    maxDepthFilter: number;
+    minXFilter: number;
+    maxXFilter: number;
+    contourStartStation: string;
+    contourEndStation: string;
+    stationMode1D: 'single' | 'multi';
+    selectedStationsMulti: string[];
+    focusedStation1D: string;
+    multiLayout1D: 'overlay' | 'grid';
+    chartStyles: ChartStyles;
+    textSettings: TextSettings;
+    legendPos: { x: number; y: number };
+  }[]>(() => {
+    try {
+      const saved = localStorage.getItem('ocean_custom_presets');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('ocean_custom_presets', JSON.stringify(customPresets));
+  }, [customPresets]);
+
+  const handleSaveCurrentPreset = () => {
+    const name = prompt("请输入此图表配置模板名称:", `配置备份 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+    if (!name) return;
+    
+    const newPreset = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: name,
+      timestamp: new Date().toLocaleString(),
+      visSubTab,
+      docMin,
+      docMax,
+      contourStep,
+      idwPower,
+      anisotropyFactor,
+      contourXAxis,
+      minDepthFilter,
+      maxDepthFilter,
+      minXFilter,
+      maxXFilter,
+      contourStartStation,
+      contourEndStation,
+      stationMode1D,
+      selectedStationsMulti,
+      focusedStation1D,
+      multiLayout1D,
+      chartStyles,
+      textSettings,
+      legendPos
+    };
+    
+    setCustomPresets(prev => [newPreset, ...prev]);
+  };
+
+  const handleApplyPreset = (preset: typeof customPresets[0]) => {
+    setVisSubTab(preset.visSubTab);
+    setDocMin(preset.docMin);
+    setDocMax(preset.docMax);
+    setContourStep(preset.contourStep);
+    setIdwPower(preset.idwPower);
+    setAnisotropyFactor(preset.anisotropyFactor);
+    setContourXAxis(preset.contourXAxis);
+    setMinDepthFilter(preset.minDepthFilter);
+    setMaxDepthFilter(preset.maxDepthFilter);
+    setMinXFilter(preset.minXFilter);
+    setMaxXFilter(preset.maxXFilter);
+    setContourStartStation(preset.contourStartStation || '');
+    setContourEndStation(preset.contourEndStation || '');
+    setStationMode1D(preset.stationMode1D);
+    setSelectedStationsMulti(preset.selectedStationsMulti || []);
+    setFocusedStation1D(preset.focusedStation1D || '');
+    setMultiLayout1D(preset.multiLayout1D);
+    setChartStyles(preset.chartStyles);
+    setTextSettings(preset.textSettings);
+    setLegendPos(preset.legendPos);
+  };
+
+  const handleDeletePreset = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm("确定要删除此保存的图表配置模板吗？")) {
+      setCustomPresets(prev => prev.filter(p => p.id !== id));
+    }
+  };
 
   // Double-click Editor State
   const [editor, setEditor] = useState<{
@@ -393,7 +497,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       pointStroke1D: '#ffffff', // High-contrast White stroke
       lineStroke1D: '#2563eb', // Sync with royal blue line
       gridStroke1D: '#cbd5e1', // Soft grid lines
-      axisStroke1D: '#475569' // Professional slate grey axes
+      axisStroke1D: '#475569', // Professional slate grey axes
+      yAxisTitleOffset: 0,
+      xAxisTitleOffset: 0,
+      colorbarTitleOffset: 0
     };
   });
 
@@ -411,6 +518,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
   // Drag states for 1D chart legend
   const [legendPos, setLegendPos] = useState(() => loadSavedState('ocean_legendPos', { x: 380, y: 30 }));
   const [legendDragging, setLegendDragging] = useState<{ startX: number; startY: number; startLeft: number; startTop: number } | null>(null);
+
+  // Preview modal state
+  const [previewModal, setPreviewModal] = useState<{ open: boolean; imgUrl: string; filename: string; format: 'png' | 'svg' } | null>(null);
 
   // Close double-click popover on outside click
   useEffect(() => {
@@ -445,9 +555,12 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     localStorage.setItem('ocean_chart_styles', JSON.stringify(chartStyles));
     localStorage.setItem('ocean_text_settings', JSON.stringify(textSettings));
     localStorage.setItem('ocean_legendPos', JSON.stringify(legendPos));
+    localStorage.setItem('ocean_contourStartStation', JSON.stringify(contourStartStation));
+    localStorage.setItem('ocean_contourEndStation', JSON.stringify(contourEndStation));
   }, [
     visSubTab, selectedStation, stationMode1D, selectedStationsMulti, focusedStation1D, multiLayout1D, docMin, docMax, contourStep, idwPower, anisotropyFactor,
-    contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, visSettingsTab, settingsTab1D, stationSortMode1D, chartStyles, textSettings, legendPos
+    contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, visSettingsTab, settingsTab1D, stationSortMode1D, chartStyles, textSettings, legendPos,
+    contourStartStation, contourEndStation
   ]);
 
   // Automatically toggle top labels based on X-Axis type to avoid duplicate redundancy by default
@@ -455,6 +568,17 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     setChartStyles(prev => ({
       ...prev,
       showTopStationLabels: contourXAxis !== 'station'
+    }));
+    setTextSettings(prev => ({
+      ...prev,
+      xAxisLabel: {
+        ...prev.xAxisLabel,
+        text: contourXAxis === 'longitude'
+          ? 'Longitude (°E)'
+          : contourXAxis === 'latitude'
+            ? 'Latitude (°N)'
+            : 'Station Index'
+      }
     }));
   }, [contourXAxis]);
 
@@ -777,54 +901,30 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     if (themeName === 'nature') {
       setChartStyles(prev => ({
         ...prev,
-        fontFamily: "'Times New Roman', Times, serif",
         tickDirection: 'inward',
         closedBorderTicks: true,
         axisStroke: '#000000',
         gridStroke: '#e2e8f0',
         colormap: 'viridis'
       }));
-      setTextSettings(prev => {
-        const copy = { ...prev };
-        Object.keys(copy).forEach(k => {
-          copy[k as keyof TextSettings].fontFamily = "'Times New Roman', Times, serif";
-        });
-        return copy;
-      });
     } else if (themeName === 'odv') {
       setChartStyles(prev => ({
         ...prev,
-        fontFamily: "Arial, Helvetica, sans-serif",
         tickDirection: 'outward',
         closedBorderTicks: false,
         axisStroke: '#000000',
         gridStroke: '#cbd5e1',
         colormap: 'odv'
       }));
-      setTextSettings(prev => {
-        const copy = { ...prev };
-        Object.keys(copy).forEach(k => {
-          copy[k as keyof TextSettings].fontFamily = "Arial, Helvetica, sans-serif";
-        });
-        return copy;
-      });
     } else if (themeName === 'modern') {
       setChartStyles(prev => ({
         ...prev,
-        fontFamily: "Helvetica, sans-serif",
         tickDirection: 'outward',
         closedBorderTicks: true,
         axisStroke: '#1e293b',
         gridStroke: '#f1f5f9',
         colormap: 'coolwarm'
       }));
-      setTextSettings(prev => {
-        const copy = { ...prev };
-        Object.keys(copy).forEach(k => {
-          copy[k as keyof TextSettings].fontFamily = "Helvetica, sans-serif";
-        });
-        return copy;
-      });
     }
   };
 
@@ -838,7 +938,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
   };
 
   // 1D Plot download handlers
-  const download1DPlot = (format: 'png' | 'svg') => {
+  const download1DPlot = (format: 'png' | 'svg', isPreview = false) => {
     const container = chart1dContainerRef.current;
     if (!container) return;
     const svg = container.querySelector('svg');
@@ -856,11 +956,15 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       const svgString = new XMLSerializer().serializeToString(clone);
       const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
       const url = URL.createObjectURL(svgBlob);
-      const link = document.createElement('a');
-      link.download = `${selectedStation || 'ST'}_1D_Profile.svg`;
-      link.href = url;
-      link.click();
-      URL.revokeObjectURL(url);
+      if (isPreview) {
+        setPreviewModal({ open: true, imgUrl: url, filename: `${selectedStation || 'ST'}_1D_Profile.svg`, format: 'svg' });
+      } else {
+        const link = document.createElement('a');
+        link.download = `${selectedStation || 'ST'}_1D_Profile.svg`;
+        link.href = url;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
       return;
     }
 
@@ -891,15 +995,20 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
 
-      const link = document.createElement('a');
-      link.download = `${selectedStation || 'ST'}_1D_Profile.png`;
-      link.href = combinedCanvas.toDataURL('image/png');
-      link.click();
+      const pngUrl = combinedCanvas.toDataURL('image/png');
+      if (isPreview) {
+        setPreviewModal({ open: true, imgUrl: pngUrl, filename: `${selectedStation || 'ST'}_1D_Profile.png`, format: 'png' });
+      } else {
+        const link = document.createElement('a');
+        link.download = `${selectedStation || 'ST'}_1D_Profile.png`;
+        link.href = pngUrl;
+        link.click();
+      }
     };
     img.src = url;
   };
 
-  const download2DPlot = (format: 'png' | 'svg') => {
+  const download2DPlot = (format: 'png' | 'svg', isPreview = false) => {
     const canvas = canvasElement;
     if (!canvas) return;
 
@@ -922,7 +1031,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       // Embed canvas raster background as SVG Image element
       const rasterDataUrl = canvas.toDataURL('image/png');
       const svgImage = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-      svgImage.setAttribute('x', '60');
+      svgImage.setAttribute('x', '80');
       svgImage.setAttribute('y', '90');
       svgImage.setAttribute('width', '720');
       svgImage.setAttribute('height', '380');
@@ -940,11 +1049,15 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       const svgString = new XMLSerializer().serializeToString(clone);
       const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
       const url = URL.createObjectURL(svgBlob);
-      const link = document.createElement('a');
-      link.download = `${selectedStation || 'DOC'}_2D_Contour.svg`;
-      link.href = url;
-      link.click();
-      URL.revokeObjectURL(url);
+      if (isPreview) {
+        setPreviewModal({ open: true, imgUrl: url, filename: `${selectedStation || 'DOC'}_2D_Contour.svg`, format: 'svg' });
+      } else {
+        const link = document.createElement('a');
+        link.download = `${selectedStation || 'DOC'}_2D_Contour.svg`;
+        link.href = url;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
       return;
     }
 
@@ -959,8 +1072,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
-    // Draw background raster canvas exactly where it sits in the preview (left:60px, top:90px, size: 720x380)
-    ctx.drawImage(canvas, 60, 90, 720, 380);
+    // Draw background raster canvas exactly where it sits in the preview (left:80px, top:90px, size: 720x380)
+    ctx.drawImage(canvas, 80, 90, 720, 380);
 
     const clone = svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute('width', width.toString());
@@ -978,10 +1091,15 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
 
-      const link = document.createElement('a');
-      link.download = `${selectedStation || 'DOC'}_2D_Contour.png`;
-      link.href = combinedCanvas.toDataURL('image/png');
-      link.click();
+      const pngUrl = combinedCanvas.toDataURL('image/png');
+      if (isPreview) {
+        setPreviewModal({ open: true, imgUrl: pngUrl, filename: `${selectedStation || 'DOC'}_2D_Contour.png`, format: 'png' });
+      } else {
+        const link = document.createElement('a');
+        link.download = `${selectedStation || 'DOC'}_2D_Contour.png`;
+        link.href = pngUrl;
+        link.click();
+      }
     };
     img.src = url;
   };
@@ -1011,12 +1129,28 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     const minIdx = Math.min(startIdx, endIdx);
     const maxIdx = Math.max(startIdx, endIdx);
 
-    const activeStations = sortedStationsList.filter((st, idx) => idx >= minIdx && idx <= maxIdx);
+    const activeStations = sortedStationsList.filter((_, idx) => idx >= minIdx && idx <= maxIdx);
+
+    const stationJitteredCoords: Record<string, number> = {};
+    const seenCoords: Record<number, number> = {};
+    activeStations.forEach(st => {
+      const stSamples = validSamples.filter(s => s.station === st);
+      let coord = 0;
+      if (contourXAxis === 'longitude') {
+        coord = stSamples[0]?.longitude || 0;
+      } else if (contourXAxis === 'latitude') {
+        coord = stSamples[0]?.latitude || 0;
+      } else {
+        coord = activeStations.indexOf(st);
+      }
+      const count = seenCoords[coord] || 0;
+      seenCoords[coord] = count + 1;
+      const jitter = count * 0.0001;
+      stationJitteredCoords[st] = coord + jitter;
+    });
 
     const getXValue = (s: typeof validSamples[0]) => {
-      if (contourXAxis === 'longitude') return s.longitude || 0;
-      if (contourXAxis === 'latitude') return s.latitude || 0;
-      return activeStations.indexOf(s.station!);
+      return stationJitteredCoords[s.station!] || 0;
     };
 
     const filteredSamples = validSamples.filter(s => {
@@ -1237,14 +1371,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
         || Math.max(...stSamples.map(s => s.depth || 0), 100);
 
-      let xVal = 0;
-      if (contourXAxis === 'longitude') {
-        xVal = stSamples[0]?.longitude || 0;
-      } else if (contourXAxis === 'latitude') {
-        xVal = stSamples[0]?.latitude || 0;
-      } else {
-        xVal = activeStations.indexOf(st);
-      }
+      const xVal = stationJitteredCoords[st] || 0;
       const cx = ((xVal - minX) / xSpan) * canvasWidth;
       const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
       return { cx, cy };
@@ -1265,20 +1392,24 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     setBathyPath(pathStr);
 
     const ticks = activeStations.map(st => {
-      const stSamples = validSamples.filter(s => s.station === st);
-      let xVal = 0;
-      if (contourXAxis === 'longitude') {
-        xVal = stSamples[0]?.longitude || 0;
-      } else if (contourXAxis === 'latitude') {
-        xVal = stSamples[0]?.latitude || 0;
-      } else {
-        xVal = activeStations.indexOf(st);
-      }
+      const xVal = stationJitteredCoords[st] || 0;
       const cx = ((xVal - minX) / xSpan) * canvasWidth;
       return { name: st || '', cx };
     });
     setTopStationTicks(ticks);
   }, [canvasElement, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, contourStartStation, contourEndStation, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance]);
+
+  // Calculate adaptive axis and legend title variables
+  const maxDepthLabelLength = Math.max(...[0.0, 0.25, 0.5, 0.75, 1.0].map(r => (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0).length));
+  const estimatedYTickWidth = maxDepthLabelLength * (textSettings.ticksLabels.fontSize || 8.5) * 0.6;
+  const autoYAxisTitleX = Math.max(10, 70 - estimatedYTickWidth - 12);
+  const yAxisTitleX = autoYAxisTitleX - (chartStyles.yAxisTitleOffset || 0);
+
+  const autoXAxisTitleY = 488 + (textSettings.ticksLabels.fontSize || 8.5) + 18;
+  const xAxisTitleY = autoXAxisTitleY + (chartStyles.xAxisTitleOffset || 0);
+
+  const colorbarTitleX = 850 + chartStyles.colorbarWidth / 2;
+  const colorbarTitleY = 80 - (chartStyles.colorbarTitleOffset || 0);
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
@@ -1480,7 +1611,73 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       {/* Sub-tab: 1D Profile */}
       {visSubTab === 'profile1d' && (
         <div className="grid-1-2">
-          <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Template Presets for 1D */}
+            <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span className="font-semibold text-xs text-slate-700" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Layout size={14} className="text-sky-500" />
+                  💾 我的配置暂存与模板
+                </span>
+                <button
+                  className="btn btn-primary"
+                  style={{ padding: '2px 8px', fontSize: '10px', height: '22px' }}
+                  onClick={handleSaveCurrentPreset}
+                >
+                  暂存当前
+                </button>
+              </div>
+
+              {customPresets.length === 0 ? (
+                <div style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center', padding: '6px 0', border: '1px dashed #e2e8f0', borderRadius: '4px' }}>
+                  暂无保存的配置
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '120px', overflowY: 'auto' }}>
+                  {customPresets.map(preset => (
+                    <div
+                      key={preset.id}
+                      onClick={() => handleApplyPreset(preset)}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '4px 8px',
+                        backgroundColor: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                      className="hover:bg-slate-100"
+                      title={`保存时间: ${preset.timestamp}`}
+                    >
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px', fontWeight: '500', color: '#334155' }}>
+                        {preset.name}
+                      </span>
+                      <button
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: '#94a3b8',
+                          cursor: 'pointer',
+                          padding: '2px 4px',
+                          fontSize: '12px'
+                        }}
+                        className="hover:text-red-500"
+                        onClick={(e) => handleDeletePreset(preset.id, e)}
+                        title="删除模板"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             
             {/* 1D Settings Tabs */}
             <div className="tab-container" style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', marginBottom: '8px' }}>
@@ -1868,8 +2065,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
               </div>
             )}
           </div>
+        </div>
 
-          <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+        <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3
                 className="card-title"
@@ -1894,10 +2092,28 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 <button
                   className="btn btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => download1DPlot('png', true)}
+                  title="预览 PNG 出图效果"
+                >
+                  <Info size={12} />
+                  <span>预览 PNG</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => download1DPlot('png')}
                 >
                   <Download size={12} />
                   <span>保存 PNG</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => download1DPlot('svg', true)}
+                  title="预览 SVG 出图效果"
+                >
+                  <Info size={12} />
+                  <span>预览 SVG</span>
                 </button>
                 <button
                   className="btn btn-secondary"
@@ -2478,6 +2694,69 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 <button className="btn btn-secondary" style={{ padding: '6px 4px', fontSize: '10px' }} onClick={() => handleApplyTheme('odv')}>ODV</button>
                 <button className="btn btn-secondary" style={{ padding: '6px 4px', fontSize: '10px' }} onClick={() => handleApplyTheme('modern')}>现代蓝色</button>
               </div>
+
+              <div style={{ borderTop: '1px solid #f1f5f9', marginTop: '6px', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="font-semibold text-xs text-slate-700" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    💾 我的配置暂存与模板
+                  </span>
+                  <button
+                    className="btn btn-primary"
+                    style={{ padding: '2px 8px', fontSize: '10px', height: '22px' }}
+                    onClick={handleSaveCurrentPreset}
+                  >
+                    暂存当前
+                  </button>
+                </div>
+
+                {customPresets.length === 0 ? (
+                  <div style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'center', padding: '6px 0', border: '1px dashed #e2e8f0', borderRadius: '4px' }}>
+                    暂无保存的配置
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '120px', overflowY: 'auto' }}>
+                    {customPresets.map(preset => (
+                      <div
+                        key={preset.id}
+                        onClick={() => handleApplyPreset(preset)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '4px 8px',
+                          backgroundColor: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                        className="hover:bg-slate-100"
+                        title={`保存时间: ${preset.timestamp}`}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px', fontWeight: '500', color: '#334155' }}>
+                          {preset.name}
+                        </span>
+                        <button
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: '#94a3b8',
+                            cursor: 'pointer',
+                            padding: '2px 4px',
+                            fontSize: '12px'
+                          }}
+                          className="hover:text-red-500"
+                          onClick={(e) => handleDeletePreset(preset.id, e)}
+                          title="删除模板"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Top-Left Station scatter map on 2D tab */}
@@ -2899,6 +3178,59 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                        </label>
                      </div>
 
+                      {/* Title Offset sliders */}
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>文字标题位置微调 (自适应基础)</label>
+                        
+                        <div className="input-group">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                            <span>纵轴(深度)标题左偏: {chartStyles.yAxisTitleOffset || 0}px</span>
+                            <span>向左移动</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="40"
+                            step="1"
+                            value={chartStyles.yAxisTitleOffset || 0}
+                            onChange={e => setChartStyles(prev => ({ ...prev, yAxisTitleOffset: parseInt(e.target.value) }))}
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+
+                        <div className="input-group">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                            <span>横轴(站位)标题下偏: {chartStyles.xAxisTitleOffset || 0}px</span>
+                            <span>向下移动</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="-10"
+                            max="40"
+                            step="1"
+                            value={chartStyles.xAxisTitleOffset || 0}
+                            onChange={e => setChartStyles(prev => ({ ...prev, xAxisTitleOffset: parseInt(e.target.value) }))}
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+
+                        <div className="input-group" style={{ marginBottom: '6px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                            <span>色标标题上偏: {chartStyles.colorbarTitleOffset || 0}px</span>
+                            <span>向上移动</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="-10"
+                            max="40"
+                            step="1"
+                            value={chartStyles.colorbarTitleOffset || 0}
+                            onChange={e => setChartStyles(prev => ({ ...prev, colorbarTitleOffset: parseInt(e.target.value) }))}
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+                      </div>
+
                      {/* Color Adjusters */}
                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
                        <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>线框网格配色微调</label>
@@ -2961,10 +3293,28 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 <button
                   className="btn btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => download2DPlot('png', true)}
+                  title="预览 PNG 出图效果"
+                >
+                  <Info size={12} />
+                  <span>预览 PNG</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
                   onClick={() => download2DPlot('png')}
                 >
                   <Download size={12} />
                   <span>保存 PNG</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  onClick={() => download2DPlot('svg', true)}
+                  title="预览 SVG 出图效果"
+                >
+                  <Info size={12} />
+                  <span>预览 SVG</span>
                 </button>
                 <button
                   className="btn btn-secondary"
@@ -2980,12 +3330,12 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
             {/* ODV styled window container */}
             <div style={{ position: 'relative', width: '940px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
               
-              {/* Main Canvas Plot (starting at left 60px, top 90px) */}
+              {/* Main Canvas Plot (starting at left 80px, top 90px) */}
               <canvas
                 ref={setCanvasElement}
                 width={720}
                 height={380}
-                style={{ position: 'absolute', top: '90px', left: '60px', width: '720px', height: '380px', zIndex: 1, border: `1px solid ${chartStyles.axisStroke}` }}
+                style={{ position: 'absolute', top: '90px', left: '80px', width: '720px', height: '380px', zIndex: 1, border: `1px solid ${chartStyles.axisStroke}` }}
               />
 
               {/* SVG overlay (starts at 0, 0 and covers the labels area too) */}
@@ -2997,7 +3347,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 {/* Clipping path definition to keep contours within the black border */}
                 <defs>
                   <clipPath id="plot-area-clip">
-                    <rect x={60} y={90} width={720} height={380} />
+                    <rect x={80} y={90} width={720} height={380} />
                   </clipPath>
                   <linearGradient id="bathyGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#1e293b" stopOpacity="0.85" />
@@ -3023,7 +3373,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                       <path
                         key={i}
                         d={p.path}
-                        transform="translate(60, 90)"
+                        transform="translate(80, 90)"
                         fill="none"
                         stroke={chartStyles.lineStroke}
                         strokeWidth={chartStyles.lineWidth}
@@ -3035,7 +3385,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   {bathyPath && (
                     <path
                       d={bathyPath}
-                      transform="translate(60, 90)"
+                      transform="translate(80, 90)"
                       fill={chartStyles.bathyFill}
                       stroke={chartStyles.bathyStroke}
                       strokeWidth={chartStyles.bathyStrokeWidth}
@@ -3046,7 +3396,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   {contourDataPoints.map((pt, i) => (
                     <circle
                       key={i}
-                      cx={pt.cx + 60}
+                      cx={pt.cx + 80}
                       cy={pt.cy + 90}
                       r={chartStyles.pointRadius}
                       fill={chartStyles.pointFill}
@@ -3059,11 +3409,11 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </g>
 
                 {/* ODV Border Outline */}
-                <rect x={60} y={90} width={720} height={380} fill="none" stroke={chartStyles.axisStroke} strokeWidth="1" />
+                <rect x={80} y={90} width={720} height={380} fill="none" stroke={chartStyles.axisStroke} strokeWidth="1" />
 
                 {/* Left Y-Axis Title (Depth [m]) */}
                 <text
-                  x={20}
+                  x={yAxisTitleX}
                   y={280}
                   fill={textSettings.yAxisLabel.color}
                   style={{
@@ -3075,7 +3425,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                     pointerEvents: 'auto'
                   }}
                   textAnchor="middle"
-                  transform="rotate(-90 20 280)"
+                  transform={`rotate(-90 ${yAxisTitleX} 280)`}
                   onDoubleClick={(e) => handleTextDoubleClick('yAxisLabel', e)}
                 >
                   {textSettings.yAxisLabel.text}
@@ -3086,20 +3436,20 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   const depthVal = (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0);
                   const yPos = 90 + 380 * r;
                   const isOutward = chartStyles.tickDirection === 'outward';
-                  const tickX = isOutward ? 55 : 65;
+                  const tickX = isOutward ? 75 : 85;
 
                   return (
                     <g key={i}>
                       {/* Left border tick */}
-                      <line x1={tickX} y1={yPos} x2={60} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                      <line x1={tickX} y1={yPos} x2={80} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
                       
                       {/* Optional Right border tick (Closed Box symmetry) */}
                       {chartStyles.closedBorderTicks && (
-                        <line x1={780} y1={yPos} x2={isOutward ? 785 : 775} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                        <line x1={800} y1={yPos} x2={isOutward ? 805 : 795} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
                       )}
                       
                       <text
-                        x={50}
+                        x={70}
                         y={yPos + 4}
                         fill={textSettings.ticksLabels.color}
                         style={{
@@ -3122,7 +3472,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 {/* Bottom X-Axis Title */}
                 <text
                   x={420}
-                  y={526}
+                  y={xAxisTitleY}
                   fill={textSettings.xAxisLabel.color}
                   style={{
                     fontFamily: textSettings.xAxisLabel.fontFamily,
@@ -3140,7 +3490,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
 
                 {/* Bottom X-Axis Ticks & Labels */}
                 {interpolatedPoints.map((pt: { x: number; y: number; name: string }, i: number) => {
-                  const xPos = pt.x + 60;
+                  const xPos = pt.x + 80;
                   const isOutward = chartStyles.tickDirection === 'outward';
                   const tickY = isOutward ? 475 : 465;
 
@@ -3181,8 +3531,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   ]);
 
                   return sortedTicks.map((tick, i) => {
-                    const xPos = tick.cx + 60;
-                    if (xPos < 60 || xPos > 780) return null;
+                    const xPos = tick.cx + 80;
+                    if (xPos < 80 || xPos > 800) return null;
 
                     const isOutward = chartStyles.tickDirection === 'outward';
                     const tickY = isOutward ? 86 : 94;
@@ -3279,7 +3629,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 {/* Colorbar Tick Labels (drawn on the right side of color bar) */}
                 {[0.0, 0.25, 0.5, 0.75, 1.0].map((r, i) => {
                   const val = docMin + (docMax - docMin) * r;
-                  const xLineStart = 830 + 5 + chartStyles.colorbarWidth;
+                  const xLineStart = 850 + 5 + chartStyles.colorbarWidth;
                   const yPos = 470 - 380 * r;
                   return (
                     <g key={i}>
@@ -3307,7 +3657,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
 
                 {/* SVG Colorbar Panel */}
                 <rect
-                  x={830}
+                  x={850}
                   y={90}
                   width={chartStyles.colorbarWidth}
                   height={380}
@@ -3319,8 +3669,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
 
                 {/* SVG Colorbar Title */}
                 <text
-                  x={817}
-                  y={80}
+                  x={colorbarTitleX}
+                  y={colorbarTitleY}
+                  textAnchor="middle"
                   fill={textSettings.colorbarTitle.color}
                   style={{
                     fontFamily: textSettings.colorbarTitle.fontFamily,
@@ -3338,9 +3689,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 {/* ================= INTERACTION GATES: INVISIBLE AXIS DRAG PANELS ================= */}
                 {/* Y-Axis Pan Rectangle (middle 80% range) */}
                 <rect
-                  x={20}
+                  x={10}
                   y={130}
-                  width={40}
+                  width={60}
                   height={300}
                   fill="transparent"
                   cursor="grab"
@@ -3351,9 +3702,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </rect>
                 {/* Y-Axis Scale Min Rectangle (top 10%) */}
                 <rect
-                  x={20}
+                  x={10}
                   y={90}
-                  width={40}
+                  width={60}
                   height={40}
                   fill="transparent"
                   cursor="ns-resize"
@@ -3364,9 +3715,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </rect>
                 {/* Y-Axis Scale Max Rectangle (bottom 10%) */}
                 <rect
-                  x={20}
+                  x={10}
                   y={430}
-                  width={40}
+                  width={60}
                   height={40}
                   fill="transparent"
                   cursor="ns-resize"
@@ -3378,7 +3729,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
 
                 {/* X-Axis Pan Rectangle (middle 80% range) */}
                 <rect
-                  x={132}
+                  x={152}
                   y={470}
                   width={576}
                   height={40}
@@ -3391,7 +3742,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </rect>
                 {/* X-Axis Scale Min Rectangle (left 10%) */}
                 <rect
-                  x={60}
+                  x={80}
                   y={470}
                   width={72}
                   height={40}
@@ -3404,7 +3755,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </rect>
                 {/* X-Axis Scale Max Rectangle (right 10%) */}
                 <rect
-                  x={708}
+                  x={728}
                   y={470}
                   width={72}
                   height={40}
@@ -3424,6 +3775,104 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
               <span>● 黑色圆点：实际采样点</span>
               <span>■ 灰色阴影：海底地形 (海床)</span>
               <span>💡 支持直接在坐标轴上拖拽平移范围，轴两端拖拽拉伸轴距</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 出图预览 Modal */}
+      {previewModal && previewModal.open && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+          fontFamily: 'system-ui, sans-serif'
+        }}>
+          <div style={{
+            background: '#ffffff',
+            borderRadius: '16px',
+            padding: '24px',
+            maxWidth: '90%',
+            maxHeight: '90%',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', paddingBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#1e293b' }}>
+                出图效果预览 ({previewModal.format.toUpperCase()} 格式)
+              </h3>
+              <button
+                style={{
+                  border: 'none',
+                  background: 'none',
+                  fontSize: '20px',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  padding: '4px'
+                }}
+                onClick={() => setPreviewModal(null)}
+              >
+                &times;
+              </button>
+            </div>
+            
+            <div style={{
+              overflow: 'auto',
+              maxHeight: '60vh',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+              padding: '16px',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center'
+            }}>
+              {previewModal.format === 'svg' ? (
+                <object
+                  data={previewModal.imgUrl}
+                  type="image/svg+xml"
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', minWidth: '400px' }}
+                />
+              ) : (
+                <img
+                  src={previewModal.imgUrl}
+                  alt="Plot Preview"
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                />
+              )}
+            </div>
+            
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #f1f5f9', paddingTop: '16px' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setPreviewModal(null)}
+                style={{ padding: '8px 16px', fontSize: '14px' }}
+              >
+                关闭预览
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  const link = document.createElement('a');
+                  link.download = previewModal.filename;
+                  link.href = previewModal.imgUrl;
+                  link.click();
+                  setPreviewModal(null);
+                }}
+                style={{ padding: '8px 16px', fontSize: '14px', background: '#0284c7', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+              >
+                确认下载此图
+              </button>
             </div>
           </div>
         </div>
