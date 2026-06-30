@@ -177,6 +177,9 @@ interface ChartStyles {
   show1DGridX: boolean;
   show1DGridY: boolean;
   invertYAxis1D?: boolean;
+  subplotMarginTop?: number;
+  subplotXAxisOrientation?: 'top' | 'bottom';
+  tickMargin1D?: number;
 
   // Decoupled 1D Colors
   pointFill1D: string;
@@ -248,6 +251,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
   const [showBackgroundMap] = useState<boolean>(() => loadSavedState('ocean_showBackgroundMap', false));
   const [visSettingsTab, setVisSettingsTab] = useState<'data' | 'style'>(() => loadSavedState('ocean_visSettingsTab', 'data'));
   const [settingsTab1D, setSettingsTab1D] = useState<'select' | 'style'>(() => loadSavedState<'select' | 'style'>('ocean_settingsTab1D', 'select'));
+  const [stationSortMode1D, setStationSortMode1D] = useState<'name' | 'latitude' | 'longitude'>(() => loadSavedState<'name' | 'latitude' | 'longitude'>('ocean_stationSortMode1D', 'name'));
+  const [contourStartStation, setContourStartStation] = useState<string>('');
+  const [contourEndStation, setContourEndStation] = useState<string>('');
 
   // Double-click Editor State
   const [editor, setEditor] = useState<{
@@ -378,6 +384,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       tickDirection1D: 'inward',
       show1DGridX: true,
       show1DGridY: true,
+      subplotMarginTop: 25,
+      subplotXAxisOrientation: 'top',
+      tickMargin1D: 6,
 
       // Decoupled 1D Colors
       pointFill1D: '#2563eb', // Vibrant Royal Blue
@@ -432,12 +441,13 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     localStorage.setItem('ocean_maxXFilter', JSON.stringify(maxXFilter));
     localStorage.setItem('ocean_visSettingsTab', JSON.stringify(visSettingsTab));
     localStorage.setItem('ocean_settingsTab1D', JSON.stringify(settingsTab1D));
+    localStorage.setItem('ocean_stationSortMode1D', JSON.stringify(stationSortMode1D));
     localStorage.setItem('ocean_chart_styles', JSON.stringify(chartStyles));
     localStorage.setItem('ocean_text_settings', JSON.stringify(textSettings));
     localStorage.setItem('ocean_legendPos', JSON.stringify(legendPos));
   }, [
     visSubTab, selectedStation, stationMode1D, selectedStationsMulti, focusedStation1D, multiLayout1D, docMin, docMax, contourStep, idwPower, anisotropyFactor,
-    contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, visSettingsTab, settingsTab1D, chartStyles, textSettings, legendPos
+    contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, visSettingsTab, settingsTab1D, stationSortMode1D, chartStyles, textSettings, legendPos
   ]);
 
   // Automatically toggle top labels based on X-Axis type to avoid duplicate redundancy by default
@@ -447,6 +457,18 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       showTopStationLabels: contourXAxis !== 'station'
     }));
   }, [contourXAxis]);
+
+  // Unique coordinate mapping for station scatter maps
+  const uniqueStationCoords = useMemo(() => {
+    const uniqueMap: Record<string, { station: string; longitude: number; latitude: number }> = {};
+    stationCoords.forEach(c => {
+      const key = normalizeStationName(c.station);
+      if (key && !uniqueMap[key]) {
+        uniqueMap[key] = { station: c.station, longitude: c.longitude, latitude: c.latitude };
+      }
+    });
+    return Object.values(uniqueMap) as { station: string; longitude: number; latitude: number }[];
+  }, [stationCoords]);
 
   // Derive stations list sorted naturally (e.g. S1, S2, S10)
   const sortedStationsList = useMemo(() => {
@@ -461,11 +483,40 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     });
   }, [processedSamples]);
 
+  const sortedStationsList1D = useMemo(() => {
+    if (stationSortMode1D === 'latitude' && uniqueStationCoords.length > 0) {
+      return [...sortedStationsList].sort((a, b) => {
+        const coordA = uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(a));
+        const coordB = uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(b));
+        if (!coordA) return 1;
+        if (!coordB) return -1;
+        return coordA.latitude - coordB.latitude;
+      });
+    }
+    if (stationSortMode1D === 'longitude' && uniqueStationCoords.length > 0) {
+      return [...sortedStationsList].sort((a, b) => {
+        const coordA = uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(a));
+        const coordB = uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(b));
+        if (!coordA) return 1;
+        if (!coordB) return -1;
+        return coordA.longitude - coordB.longitude;
+      });
+    }
+    return sortedStationsList;
+  }, [sortedStationsList, stationSortMode1D, uniqueStationCoords]);
+
   useEffect(() => {
     if (!selectedStation && sortedStationsList.length > 0) {
       setSelectedStation(sortedStationsList[0]);
     }
   }, [sortedStationsList, selectedStation]);
+
+  useEffect(() => {
+    if (sortedStationsList.length > 0) {
+      if (!contourStartStation) setContourStartStation(sortedStationsList[0]);
+      if (!contourEndStation) setContourEndStation(sortedStationsList[sortedStationsList.length - 1]);
+    }
+  }, [sortedStationsList]);
 
   // Compute data bounds
   const dataBounds = useMemo(() => {
@@ -496,9 +547,13 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     if (contourXAxis === 'longitude') {
       setMinXFilter(dataBounds.minLon);
       setMaxXFilter(dataBounds.maxLon);
+      setContourStartStation('');
+      setContourEndStation('');
     } else if (contourXAxis === 'latitude') {
       setMinXFilter(dataBounds.minLat);
       setMaxXFilter(dataBounds.maxLat);
+      setContourStartStation('');
+      setContourEndStation('');
     } else {
       setMinXFilter(0);
       const count = sortedStationsList.length;
@@ -506,17 +561,6 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     }
   }, [contourXAxis, dataBounds.minLon, dataBounds.maxLon, dataBounds.minLat, dataBounds.maxLat, sortedStationsList.length]);
 
-  // Unique coordinate mapping for station scatter maps
-  const uniqueStationCoords = useMemo(() => {
-    const uniqueMap: Record<string, { station: string; longitude: number; latitude: number }> = {};
-    stationCoords.forEach(c => {
-      const key = normalizeStationName(c.station);
-      if (key && !uniqueMap[key]) {
-        uniqueMap[key] = { station: c.station, longitude: c.longitude, latitude: c.latitude };
-      }
-    });
-    return Object.values(uniqueMap) as { station: string; longitude: number; latitude: number }[];
-  }, [stationCoords]);
 
   // Cardinal spline interpolator with dynamic tension for custom 1D line smoothness
   const curveType = useMemo(() => {
@@ -862,7 +906,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     const svg = canvas.nextElementSibling as SVGSVGElement | null;
     if (!svg) return;
 
-    const width = 890;
+    const width = 940;
     const height = 540;
     const scale = 3;
 
@@ -962,28 +1006,26 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       return;
     }
 
-    const uniqueStations = [...new Set(validSamples.map(s => s.station))].sort((a, b) => {
-      const numA = parseInt(a!.replace(/\D/g, ''), 10);
-      const numB = parseInt(b!.replace(/\D/g, ''), 10);
-      if (isNaN(numA) || isNaN(numB)) {
-        return a!.localeCompare(b!);
-      }
-      return numA - numB;
-    });
+    const startIdx = sortedStationsList.indexOf(contourStartStation || sortedStationsList[0]);
+    const endIdx = sortedStationsList.indexOf(contourEndStation || sortedStationsList[sortedStationsList.length - 1]);
+    const minIdx = Math.min(startIdx, endIdx);
+    const maxIdx = Math.max(startIdx, endIdx);
+
+    const activeStations = sortedStationsList.filter((st, idx) => idx >= minIdx && idx <= maxIdx);
 
     const getXValue = (s: typeof validSamples[0]) => {
       if (contourXAxis === 'longitude') return s.longitude || 0;
       if (contourXAxis === 'latitude') return s.latitude || 0;
-      return uniqueStations.indexOf(s.station!);
+      return activeStations.indexOf(s.station!);
     };
 
     const filteredSamples = validSamples.filter(s => {
-      const xVal = getXValue(s);
+      const stIdx = sortedStationsList.indexOf(s.station!);
       return (
         s.depth! >= minDepthFilter &&
         s.depth! <= maxDepthFilter &&
-        xVal >= minXFilter &&
-        xVal <= maxXFilter
+        stIdx >= minIdx &&
+        stIdx <= maxIdx
       );
     });
 
@@ -996,8 +1038,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     }
 
     const sampleXValues = filteredSamples.map(s => getXValue(s));
-    const minX = sampleXValues.length > 0 ? Math.min(...sampleXValues) : minXFilter;
-    const maxX = sampleXValues.length > 0 ? Math.max(...sampleXValues) : maxXFilter;
+    const minX = sampleXValues.length > 0 ? Math.min(...sampleXValues) : 0;
+    const maxX = sampleXValues.length > 0 ? Math.max(...sampleXValues) : 1;
     const minY = minDepthFilter;
     const maxY = maxDepthFilter;
     const xSpan = maxX - minX || 1;
@@ -1166,12 +1208,12 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     const ticksCount = 5;
     const labelsList = [];
     if (contourXAxis === 'station') {
-      const step = Math.max(1, Math.floor(uniqueStations.length / ticksCount));
-      for (let i = 0; i < uniqueStations.length; i += step) {
+      const step = Math.max(1, Math.floor(activeStations.length / ticksCount));
+      for (let i = 0; i < activeStations.length; i += step) {
         labelsList.push({
-          x: (i / (uniqueStations.length - 1 || 1)) * canvasWidth,
+          x: (i / (activeStations.length - 1 || 1)) * canvasWidth,
           y: 0,
-          name: uniqueStations[i]!
+          name: activeStations[i]!
         });
       }
     } else {
@@ -1188,7 +1230,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     }
     setInterpolatedPoints(labelsList);
 
-    const bathyPoints = uniqueStations.map(st => {
+    const bathyPoints = activeStations.map(st => {
       const stSamples = validSamples.filter(s => s.station === st);
       const normSt = normalizeStationName(st);
       const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
@@ -1201,7 +1243,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       } else if (contourXAxis === 'latitude') {
         xVal = stSamples[0]?.latitude || 0;
       } else {
-        xVal = uniqueStations.indexOf(st);
+        xVal = activeStations.indexOf(st);
       }
       const cx = ((xVal - minX) / xSpan) * canvasWidth;
       const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
@@ -1222,7 +1264,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     }
     setBathyPath(pathStr);
 
-    const ticks = uniqueStations.map(st => {
+    const ticks = activeStations.map(st => {
       const stSamples = validSamples.filter(s => s.station === st);
       let xVal = 0;
       if (contourXAxis === 'longitude') {
@@ -1230,13 +1272,13 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       } else if (contourXAxis === 'latitude') {
         xVal = stSamples[0]?.latitude || 0;
       } else {
-        xVal = uniqueStations.indexOf(st);
+        xVal = activeStations.indexOf(st);
       }
       const cx = ((xVal - minX) / xSpan) * canvasWidth;
       return { name: st || '', cx };
     });
     setTopStationTicks(ticks);
-  }, [canvasElement, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance]);
+  }, [canvasElement, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, contourStartStation, contourEndStation, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance]);
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
@@ -1495,18 +1537,42 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                         value={selectedStation}
                         onChange={e => setSelectedStation(e.target.value)}
                       >
-                        {sortedStationsList.map(st => (
-                          <option key={st} value={st}>{st}</option>
-                        ))}
+                        {sortedStationsList1D.map(st => {
+                          const coord = uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(st));
+                          const coordText = coord ? ` (${coord.latitude.toFixed(2)}°N, ${coord.longitude.toFixed(2)}°E)` : '';
+                          return (
+                            <option key={st} value={st}>{st}{coordText}</option>
+                          );
+                        })}
                       </select>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <div className="input-group" style={{ marginBottom: '4px' }}>
+                        <label className="input-label" style={{ fontSize: '11px' }}>站位列表排序方式 (Sort Order)</label>
+                        <select
+                          className="input-field text-xs font-semibold"
+                          style={{ padding: '4px 6px' }}
+                          value={stationSortMode1D}
+                          onChange={e => setStationSortMode1D(e.target.value as any)}
+                        >
+                          <option value="name">按站位名称 (默认)</option>
+                          {uniqueStationCoords.length > 0 && (
+                            <>
+                              <option value="latitude">按纬度排序 (从南到北)</option>
+                              <option value="longitude">按经度排序 (从西到东)</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         <label className="input-label" style={{ fontSize: '12px' }}>选择对比站位 (可多选)</label>
                         <div style={{ maxHeight: '140px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px', display: 'flex', flexDirection: 'column', gap: '6px', backgroundColor: 'var(--bg-secondary)' }}>
-                          {sortedStationsList.map(st => {
+                          {sortedStationsList1D.map(st => {
                             const isChecked = selectedStationsMulti.includes(st);
+                            const coord = uniqueStationCoords.find(c => normalizeStationName(c.station) === normalizeStationName(st));
+                            const coordText = coord ? ` (${coord.latitude.toFixed(2)}°N, ${coord.longitude.toFixed(2)}°E)` : '';
                             return (
                               <label key={st} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px', userSelect: 'none' }}>
                                 <input
@@ -1521,7 +1587,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                                     }
                                   }}
                                 />
-                                <span style={{ fontWeight: isChecked ? 'bold' : 'normal', color: isChecked ? '#0284c7' : 'inherit' }}>{st}</span>
+                                <span style={{ fontWeight: isChecked ? 'bold' : 'normal', color: isChecked ? '#0284c7' : 'inherit' }}>
+                                  {st}
+                                  <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: '6px' }}>{coordText}</span>
+                                </span>
                               </label>
                             );
                           })}
@@ -1737,6 +1806,35 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   </label>
                 </div>
 
+                {stationMode1D === 'multi' && multiLayout1D === 'grid' && (
+                  <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>并列小图专属排版微调</label>
+                    <div className="grid-2" style={{ gap: '8px' }}>
+                      <div className="input-group" style={{ marginBottom: 0 }}>
+                        <label className="input-label" style={{ fontSize: '10px' }}>X轴数据轴位置</label>
+                        <select className="input-field" style={{ padding: '6px', fontSize: '11px' }} value={chartStyles.subplotXAxisOrientation || 'top'} onChange={e => setChartStyles(prev => ({ ...prev, subplotXAxisOrientation: e.target.value as any }))}>
+                          <option value="top">顶部显示 (Top)</option>
+                          <option value="bottom">底部显示 (Bottom)</option>
+                        </select>
+                      </div>
+                      <div className="input-group" style={{ marginBottom: 0 }}>
+                        <label className="input-label" style={{ fontSize: '10px', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>刻度文字间距</span>
+                          <span className="font-bold text-sky-600">{chartStyles.tickMargin1D ?? 6}px</span>
+                        </label>
+                        <input type="range" min="0" max="20" step="1" className="w-full" value={chartStyles.tickMargin1D ?? 6} onChange={e => setChartStyles(prev => ({ ...prev, tickMargin1D: parseInt(e.target.value, 10) }))} />
+                      </div>
+                    </div>
+                    <div className="input-group" style={{ marginBottom: 0 }}>
+                      <label className="input-label" style={{ fontSize: '10px', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>小图顶部边距 (Margin Top)</span>
+                        <span className="font-bold text-sky-600">{chartStyles.subplotMarginTop ?? 25}px</span>
+                      </label>
+                      <input type="range" min="10" max="60" step="1" className="w-full" value={chartStyles.subplotMarginTop ?? 25} onChange={e => setChartStyles(prev => ({ ...prev, subplotMarginTop: parseInt(e.target.value, 10) }))} />
+                    </div>
+                  </div>
+                )}
+
                 <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '8px', marginTop: '4px' }}>
                   <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>颜色细节定制</label>
                   <div className="grid-3" style={{ gap: '8px', marginTop: '4px' }}>
@@ -1828,7 +1926,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                   padding: '8px'
                 }}>
                   {(() => {
-                    const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                        let activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                    activeStations = [...activeStations].sort((a, b) => sortedStationsList1D.indexOf(a) - sortedStationsList1D.indexOf(b));
                     return activeStations.map((st, idx) => {
                       const stData = processedSamples
                         .filter(s => s.station === st && s.depth !== null && !s.isRejected)
@@ -1859,6 +1958,11 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                           }))
                         : stData;
 
+                      const subplotTopMargin = chartStyles.subplotMarginTop ?? 25;
+                      const subplotBottomMargin = chartStyles.subplotXAxisOrientation === 'bottom' ? 30 : 5;
+                      const subplotXAxisOrientation = chartStyles.subplotXAxisOrientation ?? 'top';
+                      const subplotTickMargin = chartStyles.tickMargin1D ?? 6;
+
                       return (
                         <div key={st} style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '4px', border: '1px solid #cbd5e1', borderRadius: '8px', backgroundColor: '#ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', paddingBottom: '4px' }}>
@@ -1867,7 +1971,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                           </div>
                           <div style={{ width: '100%', height: '220px', position: 'relative' }}>
                             <ResponsiveContainer width="100%" height="100%">
-                              <ScatterChart margin={{ top: 25, right: 15, bottom: 5, left: 10 }}>
+                              <ScatterChart margin={{ top: subplotTopMargin, right: 15, bottom: subplotBottomMargin, left: 10 }}>
                                 <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridStroke1D || '#cbd5e1'} vertical={chartStyles.show1DGridX} horizontal={chartStyles.show1DGridY} />
                                 <XAxis
                                   type="number"
@@ -1878,10 +1982,11 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                                   fontSize={9}
                                   fontWeight="600"
                                   domain={sharedXDomain}
-                                  orientation="top"
+                                  orientation={subplotXAxisOrientation}
                                   axisLine={{ stroke: chartStyles.axisStroke1D }}
                                   tickLine={{ stroke: chartStyles.axisStroke1D }}
                                   tickSize={chartStyles.tickDirection1D === 'inward' ? -4 : 4}
+                                  tickMargin={subplotTickMargin}
                                 />
                                 <YAxis
                                   type="number"
@@ -1891,7 +1996,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                                   stroke={chartStyles.axisStroke1D || '#475569'}
                                   fontSize={9}
                                   fontWeight="600"
-                                  reversed={chartStyles.invertYAxis1D ?? true}
+                                  reversed={chartStyles.invertYAxis1D ?? true} tickMargin={subplotTickMargin}
                                   domain={sharedYDomain}
                                   axisLine={{ stroke: chartStyles.axisStroke1D }}
                                   tickLine={{ stroke: chartStyles.axisStroke1D }}
@@ -2592,30 +2697,122 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                         </div>
                       </div>
                     ) : (
-                      <div className="grid-2" style={{ gap: '8px' }}>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <label className="input-label" style={{ fontSize: '11px' }}>
-                            {contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
-                          </label>
-                          <input
-                            type="number"
-                            className="input-field"
-                            style={{ padding: '6px' }}
-                            value={minXFilter}
-                            onChange={e => setMinXFilter(parseFloat(e.target.value) || 0)}
-                          />
-                        </div>
-                        <div className="input-group" style={{ marginBottom: 0 }}>
-                          <label className="input-label" style={{ fontSize: '11px' }}>
-                            {contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
-                          </label>
-                          <input
-                            type="number"
-                            className="input-field"
-                            style={{ padding: '6px' }}
-                            value={maxXFilter}
-                            onChange={e => setMaxXFilter(parseFloat(e.target.value) || 0)}
-                          />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {uniqueStationCoords.length > 0 && (
+                          <div className="grid-2" style={{ gap: '8px' }}>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                              <label className="input-label" style={{ fontSize: '11px' }}>参考起始站位</label>
+                              <select
+                                className="input-field font-semibold text-xs"
+                                style={{ padding: '6px' }}
+                                value={contourStartStation}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setContourStartStation(val);
+                                  const coord = uniqueStationCoords.find(c => c.station === val);
+                                  if (coord) {
+                                    setMinXFilter(contourXAxis === 'longitude' ? coord.longitude : coord.latitude);
+                                  }
+                                }}
+                              >
+                                <option value="">-- 自定义数值 --</option>
+                                {[...uniqueStationCoords]
+                                  .sort((a, b) => 
+                                    contourXAxis === 'longitude' 
+                                      ? a.longitude - b.longitude 
+                                      : a.latitude - b.latitude
+                                  )
+                                  .map(c => (
+                                    <option key={c.station} value={c.station}>
+                                      {c.station} ({contourXAxis === 'longitude' ? `${c.longitude.toFixed(2)}°E` : `${c.latitude.toFixed(2)}°N`})
+                                    </option>
+                                  ))
+                                }
+                              </select>
+                            </div>
+                            <div className="input-group" style={{ marginBottom: 0 }}>
+                              <label className="input-label" style={{ fontSize: '11px' }}>参考结束站位</label>
+                              <select
+                                className="input-field font-semibold text-xs"
+                                style={{ padding: '6px' }}
+                                value={contourEndStation}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setContourEndStation(val);
+                                  const coord = uniqueStationCoords.find(c => c.station === val);
+                                  if (coord) {
+                                    setMaxXFilter(contourXAxis === 'longitude' ? coord.longitude : coord.latitude);
+                                  }
+                                }}
+                              >
+                                <option value="">-- 自定义数值 --</option>
+                                {[...uniqueStationCoords]
+                                  .sort((a, b) => 
+                                    contourXAxis === 'longitude' 
+                                      ? a.longitude - b.longitude 
+                                      : a.latitude - b.latitude
+                                  )
+                                  .map(c => (
+                                    <option key={c.station} value={c.station}>
+                                      {c.station} ({contourXAxis === 'longitude' ? `${c.longitude.toFixed(2)}°E` : `${c.latitude.toFixed(2)}°N`})
+                                    </option>
+                                  ))
+                                }
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        <div className="grid-2" style={{ gap: '8px' }}>
+                          <div className="input-group" style={{ marginBottom: 0 }}>
+                            <label className="input-label" style={{ fontSize: '11px' }}>
+                              {contourXAxis === 'longitude' ? '最小经度 (°)' : '最小纬度 (°)'}
+                            </label>
+                            <input
+                              type="number"
+                              className="input-field"
+                              style={{ padding: '6px' }}
+                              value={minXFilter}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value) || 0;
+                                setMinXFilter(val);
+                                const currentCoord = uniqueStationCoords.find(c => c.station === contourStartStation);
+                                if (currentCoord) {
+                                  const targetCoord = contourXAxis === 'longitude' ? currentCoord.longitude : currentCoord.latitude;
+                                  if (Math.abs(targetCoord - val) > 0.0001) {
+                                    setContourStartStation('');
+                                  }
+                                } else {
+                                  setContourStartStation('');
+                                }
+                              }}
+                              step="any"
+                            />
+                          </div>
+                          <div className="input-group" style={{ marginBottom: 0 }}>
+                            <label className="input-label" style={{ fontSize: '11px' }}>
+                              {contourXAxis === 'longitude' ? '最大经度 (°)' : '最大纬度 (°)'}
+                            </label>
+                            <input
+                              type="number"
+                              className="input-field"
+                              style={{ padding: '6px' }}
+                              value={maxXFilter}
+                              onChange={e => {
+                                const val = parseFloat(e.target.value) || 0;
+                                setMaxXFilter(val);
+                                const currentCoord = uniqueStationCoords.find(c => c.station === contourEndStation);
+                                if (currentCoord) {
+                                  const targetCoord = contourXAxis === 'longitude' ? currentCoord.longitude : currentCoord.latitude;
+                                  if (Math.abs(targetCoord - val) > 0.0001) {
+                                    setContourEndStation('');
+                                  }
+                                } else {
+                                  setContourEndStation('');
+                                }
+                              }}
+                              step="any"
+                            />
+                          </div>
                         </div>
                       </div>
                     )}
@@ -2781,7 +2978,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
             </div>
 
             {/* ODV styled window container */}
-            <div style={{ position: 'relative', width: '890px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
+            <div style={{ position: 'relative', width: '940px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
               
               {/* Main Canvas Plot (starting at left 60px, top 90px) */}
               <canvas
@@ -2793,9 +2990,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
 
               {/* SVG overlay (starts at 0, 0 and covers the labels area too) */}
               <svg
-                width={890}
+                width={940}
                 height={540}
-                style={{ position: 'absolute', top: 0, left: 0, width: '890px', height: '540px', zIndex: 2, pointerEvents: 'none' }}
+                style={{ position: 'absolute', top: 0, left: 0, width: '940px', height: '540px', zIndex: 2, pointerEvents: 'none' }}
               >
                 {/* Clipping path definition to keep contours within the black border */}
                 <defs>
