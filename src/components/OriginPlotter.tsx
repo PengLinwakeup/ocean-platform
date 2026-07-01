@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
+import { fromBlob } from 'geotiff';
 import {
   LineChart, Map, Download, AlertTriangle, Wrench, Layout, Info
 } from 'lucide-react';
@@ -373,6 +374,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   const [contourEndStation, setContourEndStation] = useState<string>(() => loadSavedState('ocean_contourEndStation', ''));
   const [highResBathyPoints, setHighResBathyPoints] = useState<{ xVal: number; depth: number }[]>([]);
   const [loadingBathy, setLoadingBathy] = useState<boolean>(false);
+  const [localTiffFile, setLocalTiffFile] = useState<File | null>(null);
+  const [bathySource, setBathySource] = useState<'api' | 'tiff' | 'fallback'>('api');
 
   // Custom templates/presets state for preserving work steps
   const [customPresets, setCustomPresets] = useState<{
@@ -872,6 +875,59 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         return;
       }
 
+      // 1. Try local GeoTIFF file first if uploaded (highly efficient on-demand windowed read)
+      if (localTiffFile) {
+        try {
+          const tiff = await fromBlob(localTiffFile);
+          const image = await tiff.getImage();
+          const width = image.getWidth();
+          const height = image.getHeight();
+          const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY] -> [minLon, minLat, maxLon, maxLat]
+          const [minLon, minLat, maxLon, maxLat] = bbox;
+
+          const tiffPoints: { xVal: number; depth: number }[] = [];
+
+          for (const pt of trackPoints) {
+            if (isCancelled) return;
+            if (
+              pt.longitude >= minLon &&
+              pt.longitude <= maxLon &&
+              pt.latitude >= minLat &&
+              pt.latitude <= maxLat
+            ) {
+              const xPercent = (pt.longitude - minLon) / (maxLon - minLon);
+              const yPercent = (maxLat - pt.latitude) / (maxLat - minLat);
+              const px = Math.max(0, Math.min(width - 1, Math.floor(xPercent * (width - 1))));
+              const py = Math.max(0, Math.min(height - 1, Math.floor(yPercent * (height - 1))));
+
+              // Read exactly 1x1 pixel window to minimize memory footprint
+              const rasters = await image.readRasters({
+                window: [px, py, px + 1, py + 1]
+              });
+              const val = rasters[0] ? (rasters[0] as any)[0] : null;
+
+              let depth = pt.fallbackDepth;
+              if (val !== null && val !== undefined && !isNaN(val) && val < 50000 && val > -50000) {
+                depth = Math.abs(val);
+              }
+              tiffPoints.push({ xVal: pt.xVal, depth });
+            } else {
+              tiffPoints.push({ xVal: pt.xVal, depth: pt.fallbackDepth });
+            }
+          }
+
+          if (!isCancelled) {
+            setHighResBathyPoints(tiffPoints);
+            setBathySource('tiff');
+            setLoadingBathy(false);
+          }
+          return;
+        } catch (err) {
+          console.error("Failed to read local GeoTIFF, falling back to online API:", err);
+          // Let it fall through to API fetching
+        }
+      }
+
       const fetchedPoints: { xVal: number; depth: number }[] = [];
       const CHUNK_SIZE = 100;
 
@@ -937,6 +993,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
         if (!isCancelled) {
           setHighResBathyPoints(fetchedPoints);
+          setBathySource('api');
           setLoadingBathy(false);
         }
       } catch (err) {
@@ -946,6 +1003,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             xVal: p.xVal,
             depth: p.fallbackDepth
           })));
+          setBathySource('fallback');
           setLoadingBathy(false);
         }
       }
@@ -956,7 +1014,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     return () => {
       isCancelled = true;
     };
-  }, [visSubTab, activeStations2D, stationCoords, processedSamples, uniqueStationCoords, contourXAxis, stationJitteredCoords2D]);
+  }, [visSubTab, activeStations2D, stationCoords, processedSamples, uniqueStationCoords, contourXAxis, stationJitteredCoords2D, localTiffFile]);
 
   useEffect(() => {
     if (!selectedStation && sortedStationsList.length > 0) {
@@ -3287,18 +3345,88 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 <div className={`tab-btn ${visSettingsTab === 'style' ? 'active' : ''}`} onClick={() => setVisSettingsTab('style')}>学术样式</div>
               </div>
 
-              {loadingBathy && (
-                <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', padding: '4px 8px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '4px' }}>
-                  <div className="animate-spin" style={{ display: 'inline-block', width: '10px', height: '10px', border: '1.5px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%' }} />
-                  正在在线获取 GEBCO 高精度洋底地形...
+              {/* Bathymetry Status & Optional Local TIFF Uploader */}
+              <div style={{ border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px', marginBottom: '12px', backgroundColor: 'var(--bg-secondary)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>洋底地形线 (Bathymetry)</span>
+                  {localTiffFile && (
+                    <button
+                      onClick={() => setLocalTiffFile(null)}
+                      style={{ fontSize: '10px', color: '#ef4444', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                      title="清除本地 GeoTIFF 文件，还原为在线 API 模式"
+                    >
+                      [还原默认 API]
+                    </button>
+                  )}
                 </div>
-              )}
-              {!loadingBathy && highResBathyPoints.length > 0 && (
-                <div style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', padding: '4px 8px', backgroundColor: '#ecfdf5', borderRadius: '4px' }}>
-                  <span style={{ display: 'inline-block', width: '6px', height: '6px', backgroundColor: '#10b981', borderRadius: '50%' }} />
-                  已启用 GEBCO 在线高精度洋底地形
+
+                {loadingBathy && (
+                  <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', padding: '4px 8px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '4px' }}>
+                    <div className="animate-spin" style={{ display: 'inline-block', width: '10px', height: '10px', border: '1.5px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%' }} />
+                    正在{localTiffFile ? '从本地 GeoTIFF 中' : '在线'}解析高精度洋底地形...
+                  </div>
+                )}
+
+                {!loadingBathy && highResBathyPoints.length > 0 && (
+                  <div style={{
+                    fontSize: '11px',
+                    color: bathySource === 'fallback' ? '#d97706' : '#10b981',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    marginBottom: '8px',
+                    padding: '4px 8px',
+                    backgroundColor: bathySource === 'fallback' ? '#fffbeb' : '#ecfdf5',
+                    borderRadius: '4px',
+                    wordBreak: 'break-all'
+                  }}>
+                    <span style={{
+                      display: 'inline-block',
+                      width: '6px',
+                      height: '6px',
+                      backgroundColor: bathySource === 'fallback' ? '#d97706' : '#10b981',
+                      borderRadius: '50%'
+                    }} />
+                    {bathySource === 'tiff'
+                      ? `已启用本地 TIFF 地形: ${localTiffFile?.name}`
+                      : bathySource === 'api'
+                        ? '已启用 GEBCO 2020 Grid (在线 API)'
+                        : '已启用本地线性插值地形 (离线模式)'}
+                  </div>
+                )}
+
+                {/* File Uploader Input */}
+                <div style={{ position: 'relative', marginTop: '6px' }}>
+                  <label style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '8px',
+                    border: '1px dashed var(--border-color)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    backgroundColor: 'var(--bg-tertiary)',
+                    textAlign: 'center',
+                    fontSize: '11px',
+                    color: 'var(--text-muted)'
+                  }}>
+                    <span style={{ fontWeight: '500', color: '#0284c7' }}>点击或拖拽上传本地 GeoTIFF (.tif)</span>
+                    <span style={{ fontSize: '9px', marginTop: '2px' }}>(可选：用于 GEBCO 2026 等离线高精度地形)</span>
+                    <input
+                      type="file"
+                      accept=".tif,.tiff"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setLocalTiffFile(file);
+                        }
+                      }}
+                    />
+                  </label>
                 </div>
-              )}
+              </div>
 
               {visSettingsTab === 'data' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -4240,7 +4368,6 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   style={{ pointerEvents: 'auto', zIndex: 10 }}
                   onMouseDown={(e) => handleXAxisMouseDown('scale-max', e)}
                 >
-                  <title>左右拖拽：缩放横坐标上限</title>
                 </rect>
               </svg>
             </div>
