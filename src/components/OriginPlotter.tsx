@@ -641,6 +641,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   // Preview modal state
   const [previewModal, setPreviewModal] = useState<{ open: boolean; imgUrl: string; filename: string; format: 'png' | 'svg' } | null>(null);
 
+  // Local state for maskDistance slider to make dragging highly responsive
+  const [sliderMaskDistance, setSliderMaskDistance] = useState(chartStyles.maskDistance);
+  const maskDebounceTimer = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    setSliderMaskDistance(chartStyles.maskDistance);
+  }, [chartStyles.maskDistance]);
+
   // Close double-click popover on outside click
   useEffect(() => {
     const handleOutsideClick = () => {
@@ -1612,24 +1620,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     img.src = url;
   };
 
-  // Draw contour plot on dependencies change
-  useEffect(() => {
-    if (!canvasElement) return;
-
-    const canvas = canvasElement;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+  // 1. Decoupled IDW grid and distance field calculations
+  const gridData = useMemo(() => {
     const validSamples = processedSamples.filter(
       s => s.station !== null && s.depth !== null && !s.isRejected && !s.isBlank && !s.isStd
     );
 
     if (validSamples.length === 0) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      setContourSvgPaths([]);
-      setContourDataPoints([]);
-      setInterpolatedPoints([]);
-      return;
+      return null;
     }
 
     const startIdx = sortedStationsList.indexOf(contourStartStation || sortedStationsList[0]);
@@ -1652,11 +1650,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     });
 
     if (filteredSamples.length === 0) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      setContourSvgPaths([]);
-      setContourDataPoints([]);
-      setInterpolatedPoints([]);
-      return;
+      return null;
     }
 
     const sampleXValues = filteredSamples.map(s => getXValue(s));
@@ -1676,17 +1670,118 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       rawY: (s.depth! - minY) / ySpan
     }));
 
-    const gridWidth = 100;
-    const gridHeight = 100;
+    const gridWidth = 80;
+    const gridHeight = 80;
     const gridValues = new Float32Array(gridWidth * gridHeight);
+    const gridDistSq = new Float32Array(gridWidth * gridHeight);
 
     for (let r = 0; r < gridHeight; r++) {
       const gridYNorm = (r / (gridHeight - 1)) * anisotropyFactor;
+      const rawY = r / (gridHeight - 1);
+      
       for (let c = 0; c < gridWidth; c++) {
         const gridXNorm = c / (gridWidth - 1);
-        gridValues[r * gridWidth + c] = interpolateIDW(dataPoints, gridXNorm, gridYNorm, idwPower);
+        const idx = r * gridWidth + c;
+        
+        // 1. Interpolate value
+        gridValues[idx] = interpolateIDW(dataPoints, gridXNorm, gridYNorm, idwPower);
+        
+        // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
+        let minDistSq = 999999;
+        for (let i = 0; i < dataPoints.length; i++) {
+          const dx = gridXNorm - dataPoints[i].rawX;
+          const dy = rawY - dataPoints[i].rawY;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < minDistSq) {
+            minDistSq = distSq;
+          }
+        }
+        gridDistSq[idx] = minDistSq;
       }
     }
+
+    const ticksCount = 5;
+    const labelsList = [];
+    if (contourXAxis === 'station') {
+      const step = Math.max(1, Math.floor(activeStations2D.length / ticksCount));
+      for (let i = 0; i < activeStations2D.length; i += step) {
+        labelsList.push({
+          x: (i / (activeStations2D.length - 1 || 1)) * 720,
+          y: 0,
+          name: activeStations2D[i]!
+        });
+      }
+    } else {
+      for (let i = 0; i < ticksCount; i++) {
+        const ratio = i / (ticksCount - 1);
+        const val = minX + ratio * xSpan;
+        const unit = contourXAxis === 'longitude' ? '°E' : '°N';
+        labelsList.push({
+          x: ratio * 720,
+          y: 0,
+          name: `${val.toFixed(1)}${unit}`
+        });
+      }
+    }
+
+    const sampleDots = filteredSamples.map(s => {
+      const xVal = getXValue(s);
+      const cx = ((xVal - minX) / xSpan) * 720;
+      const cy = ((s.depth! - minY) / ySpan) * 380;
+      return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan };
+    });
+
+    const ticks = activeStations2D.map(st => {
+      const xVal = stationJitteredCoords2D[st] || 0;
+      const cx = ((xVal - minX) / xSpan) * 720;
+      return { name: st || '', cx };
+    });
+
+    return {
+      gridValues,
+      gridDistSq,
+      minX,
+      maxX,
+      xSpan,
+      minY,
+      maxY,
+      ySpan,
+      filteredSamples,
+      labelsList,
+      sampleDots,
+      ticks,
+      validSamples
+    };
+  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis]);
+
+  // Draw contour plot on dependencies change
+  useEffect(() => {
+    if (!canvasElement) return;
+
+    const canvas = canvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (!gridData) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      setContourSvgPaths([]);
+      setContourDataPoints([]);
+      setInterpolatedPoints([]);
+      return;
+    }
+
+    const {
+      gridValues,
+      gridDistSq,
+      minX,
+      xSpan,
+      minY,
+      ySpan,
+      labelsList,
+      sampleDots,
+      ticks,
+      validSamples
+    } = gridData;
 
     const canvasWidth = canvas.width;
     const canvasHeight = canvas.height;
@@ -1706,6 +1801,35 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       .range(paletteColors)
       .clamp(true);
 
+    // OPTIMIZATION: Pre-calculate a 256-color Lookup Table (LUT)
+    const lut = new Uint8ClampedArray(256 * 3);
+    for (let i = 0; i < 256; i++) {
+      const ratio = i / 255;
+      const valForLut = docMin + ratio * (docMax - docMin || 1);
+      const hexColor = colorScale(valForLut);
+      let rVal = 0, gVal = 0, bVal = 0;
+      if (hexColor.startsWith('#')) {
+        rVal = parseInt(hexColor.slice(1, 3), 16);
+        gVal = parseInt(hexColor.slice(3, 5), 16);
+        bVal = parseInt(hexColor.slice(5, 7), 16);
+      } else {
+        const match = hexColor.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+        if (match) {
+          rVal = parseInt(match[1], 10);
+          gVal = parseInt(match[2], 10);
+          bVal = parseInt(match[3], 10);
+        }
+      }
+      lut[i * 3] = rVal;
+      lut[i * 3 + 1] = gVal;
+      lut[i * 3 + 2] = bVal;
+    }
+
+    // OPTIMIZATION: Use squared distance to completely avoid expensive Math.sqrt calls inside the loop.
+    const maskDistanceSq = chartStyles.maskDistance * chartStyles.maskDistance;
+    const gridWidth = 80;
+    const gridHeight = 80;
+
     for (let cy = 0; cy < canvasHeight; cy++) {
       const gridYRatio = cy / (canvasHeight - 1);
       const gy = gridYRatio * (gridHeight - 1);
@@ -1720,61 +1844,51 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         const x1 = Math.min(x0 + 1, gridWidth - 1);
         const tx = gx - x0;
 
+        // Bilinear interpolate grid values
         const v00 = gridValues[y0 * gridWidth + x0];
         const v10 = gridValues[y0 * gridWidth + x1];
         const v01 = gridValues[y1 * gridWidth + x0];
         const v11 = gridValues[y1 * gridWidth + x1];
 
-        // Bilinear interpolation
         let val = v00 * (1 - tx) * (1 - ty) +
           v10 * tx * (1 - ty) +
           v01 * (1 - tx) * ty +
           v11 * tx * ty;
 
+        // Bilinear interpolate distance squared values (Grid-level Distance Field Masking)
+        const d00 = gridDistSq[y0 * gridWidth + x0];
+        const d10 = gridDistSq[y0 * gridWidth + x1];
+        const d01 = gridDistSq[y1 * gridWidth + x0];
+        const d11 = gridDistSq[y1 * gridWidth + x1];
+
+        const distSq = d00 * (1 - tx) * (1 - ty) +
+          d10 * tx * (1 - ty) +
+          d01 * (1 - tx) * ty +
+          d11 * tx * ty;
+
         // Apply discrete color banding if enabled
         if (chartStyles.colorBanding === 'discrete') {
-          // Snap val to nearest contour step boundary
           const stepsCount = Math.floor((val - docMin) / contourStep);
           val = docMin + stepsCount * contourStep + contourStep / 2;
         }
 
-        // SCIENTIFIC INTERPOLATION DISTANCE MASKING
-        let minDistance = 999999;
-        for (let idx = 0; idx < dataPoints.length; idx++) {
-          const dx = gridXRatio - dataPoints[idx].rawX;
-          const dy = gridYRatio - dataPoints[idx].rawY;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < minDistance) {
-            minDistance = dist;
-          }
-        }
-
         const pixelIdx = (cy * canvasWidth + cx) * 4;
         
-        // If distance exceeds mask threshold percentage (e.g. 0.35 = 35% of plot area), mask cell to transparent/white
-        if (minDistance > chartStyles.maskDistance) {
+        // If distance exceeds mask threshold percentage, mask cell to transparent/white
+        if (distSq > maskDistanceSq) {
           imgData.data[pixelIdx] = 255;
           imgData.data[pixelIdx + 1] = 255;
           imgData.data[pixelIdx + 2] = 255;
-          imgData.data[pixelIdx + 3] = 0; // completely transparent (or white if drawn)
+          imgData.data[pixelIdx + 3] = 0;
           continue;
         }
 
-        const hexColor = colorScale(val);
-
-        let rVal = 0, gVal = 0, bVal = 0;
-        if (hexColor.startsWith('#')) {
-          rVal = parseInt(hexColor.slice(1, 3), 16);
-          gVal = parseInt(hexColor.slice(3, 5), 16);
-          bVal = parseInt(hexColor.slice(5, 7), 16);
-        } else {
-          const match = hexColor.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
-          if (match) {
-            rVal = parseInt(match[1], 10);
-            gVal = parseInt(match[2], 10);
-            bVal = parseInt(match[3], 10);
-          }
-        }
+        // Fast LUT lookup
+        const valRatio = (val - docMin) / (docMax - docMin || 1);
+        const lutIdx = Math.max(0, Math.min(255, Math.floor(valRatio * 255)));
+        const rVal = lut[lutIdx * 3];
+        const gVal = lut[lutIdx * 3 + 1];
+        const bVal = lut[lutIdx * 3 + 2];
 
         imgData.data[pixelIdx] = rVal;
         imgData.data[pixelIdx + 1] = gVal;
@@ -1818,38 +1932,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       };
     });
     setContourSvgPaths(paths);
-
-    const sampleDots = filteredSamples.map(s => {
-      const xVal = getXValue(s);
-      const cx = ((xVal - minX) / xSpan) * canvasWidth;
-      const cy = ((s.depth! - minY) / ySpan) * canvasHeight;
-      return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan };
-    });
     setContourDataPoints(sampleDots);
-
-    const ticksCount = 5;
-    const labelsList = [];
-    if (contourXAxis === 'station') {
-      const step = Math.max(1, Math.floor(activeStations2D.length / ticksCount));
-      for (let i = 0; i < activeStations2D.length; i += step) {
-        labelsList.push({
-          x: (i / (activeStations2D.length - 1 || 1)) * canvasWidth,
-          y: 0,
-          name: activeStations2D[i]!
-        });
-      }
-    } else {
-      for (let i = 0; i < ticksCount; i++) {
-        const ratio = i / (ticksCount - 1);
-        const val = minX + ratio * xSpan;
-        const unit = contourXAxis === 'longitude' ? '°E' : '°N';
-        labelsList.push({
-          x: ratio * canvasWidth,
-          y: 0,
-          name: `${val.toFixed(1)}${unit}`
-        });
-      }
-    }
     setInterpolatedPoints(labelsList);
 
     let bathyPoints: { cx: number; cy: number }[] = [];
@@ -1888,14 +1971,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       pathStr += ` L${canvasWidth},${canvasHeight} Z`;
     }
     setBathyPath(pathStr);
-
-    const ticks = activeStations2D.map(st => {
-      const xVal = stationJitteredCoords2D[st] || 0;
-      const cx = ((xVal - minX) / xSpan) * canvasWidth;
-      return { name: st || '', cx };
-    });
     setTopStationTicks(ticks);
-  }, [canvasElement, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, contourStartStation, contourEndStation, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
+  }, [canvasElement, gridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
 
   // Calculate adaptive axis and legend title variables
   const maxDepthLabelLength = Math.max(...[0.0, 0.25, 0.5, 0.75, 1.0].map(r => (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0).length));
@@ -3490,7 +3567,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   <div className="input-group">
                     <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span>数据插值截断阈值 (Masking)</span>
-                      <strong className="text-amber-600">{Math.round(chartStyles.maskDistance * 100)}%</strong>
+                      <strong className="text-amber-600">{Math.round(sliderMaskDistance * 100)}%</strong>
                     </label>
                     <input
                       type="range"
@@ -3498,8 +3575,15 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       max="1.0"
                       step="0.05"
                       className="w-full"
-                      value={chartStyles.maskDistance}
-                      onChange={e => setChartStyles(prev => ({ ...prev, maskDistance: parseFloat(e.target.value) }))}
+                      value={sliderMaskDistance}
+                      onChange={e => {
+                        const val = parseFloat(e.target.value);
+                        setSliderMaskDistance(val);
+                        if (maskDebounceTimer.current) clearTimeout(maskDebounceTimer.current);
+                        maskDebounceTimer.current = setTimeout(() => {
+                          setChartStyles(prev => ({ ...prev, maskDistance: val }));
+                        }, 60);
+                      }}
                     />
                     <p style={{ margin: '2px 0 0 0', fontSize: '9.5px', color: '#94a3b8' }}>阈值越小，插值边界越靠近实际测量点，越严谨。</p>
                   </div>

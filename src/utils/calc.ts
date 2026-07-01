@@ -156,15 +156,21 @@ export function interpolateIDW(
   let totalWeight = 0;
   let weightedSum = 0;
   
-  for (const pt of dataPoints) {
-    const d = Math.sqrt(Math.pow(gridX - pt.x, 2) + Math.pow(gridY - pt.y, 2));
+  const isPowerTwo = power === 2;
+  const len = dataPoints.length;
+
+  for (let i = 0; i < len; i++) {
+    const pt = dataPoints[i];
+    const dx = gridX - pt.x;
+    const dy = gridY - pt.y;
+    const dSq = dx * dx + dy * dy;
     
     // If we are exactly at the data point, return its value
-    if (d === 0) {
+    if (dSq === 0) {
       return pt.z;
     }
     
-    const weight = 1 / Math.pow(d, power);
+    const weight = isPowerTwo ? (1 / dSq) : (1 / Math.pow(dSq, power / 2));
     totalWeight += weight;
     weightedSum += pt.z * weight;
   }
