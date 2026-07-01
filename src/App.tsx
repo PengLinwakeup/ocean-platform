@@ -530,6 +530,15 @@ export default function App() {
         }
       }
 
+      // Standardize parsed station name to match Excel coordinate sheet exactly, preventing duplicates like ST27 vs ST-27
+      if (station && !excelMatch) {
+        const normSt = normalizeStationName(station);
+        const match = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        if (match) {
+          station = match.station;
+        }
+      }
+
       // Check if user has manual exclusions for injections
       const manualExclusions = excludedInjections[id];
 

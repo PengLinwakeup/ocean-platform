@@ -371,6 +371,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   const [stationSortMode1D, setStationSortMode1D] = useState<'name' | 'latitude' | 'longitude'>(() => loadSavedState<'name' | 'latitude' | 'longitude'>('ocean_stationSortMode1D', 'name'));
   const [contourStartStation, setContourStartStation] = useState<string>(() => loadSavedState('ocean_contourStartStation', ''));
   const [contourEndStation, setContourEndStation] = useState<string>(() => loadSavedState('ocean_contourEndStation', ''));
+  const [highResBathyPoints, setHighResBathyPoints] = useState<{ xVal: number; depth: number }[]>([]);
+  const [loadingBathy, setLoadingBathy] = useState<boolean>(false);
 
   // Custom templates/presets state for preserving work steps
   const [customPresets, setCustomPresets] = useState<{
@@ -720,7 +722,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
   // Derive stations list sorted naturally (e.g. S1, S2, S10)
   const sortedStationsList = useMemo(() => {
-    const rawList = Array.from(new Set(processedSamples.map(g => g.station).filter(Boolean))) as string[];
+    const validSamples = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank);
+    const rawList = Array.from(new Set(validSamples.map(g => g.station))) as string[];
     return rawList.sort((a, b) => {
       const numA = parseInt(a.replace(/\D/g, ''), 10);
       const numB = parseInt(b.replace(/\D/g, ''), 10);
@@ -752,6 +755,183 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     }
     return sortedStationsList;
   }, [sortedStationsList, stationSortMode1D, uniqueStationCoords]);
+
+  const activeStations2D = useMemo(() => {
+    if (sortedStationsList.length === 0) return [];
+    const startIdx = sortedStationsList.indexOf(contourStartStation || sortedStationsList[0]);
+    const endIdx = sortedStationsList.indexOf(contourEndStation || sortedStationsList[sortedStationsList.length - 1]);
+    const minIdx = Math.min(startIdx, endIdx);
+    const maxIdx = Math.max(startIdx, endIdx);
+    return sortedStationsList.filter((_, idx) => idx >= minIdx && idx <= maxIdx);
+  }, [sortedStationsList, contourStartStation, contourEndStation]);
+
+  const stationJitteredCoords2D = useMemo(() => {
+    const validSamples = processedSamples.filter(
+      s => s.station !== null && s.depth !== null && !s.isRejected && !s.isBlank && !s.isStd
+    );
+    const jitteredCoords: Record<string, number> = {};
+    const seenCoords: Record<number, number> = {};
+    activeStations2D.forEach(st => {
+      const stSamples = validSamples.filter(s => s.station === st);
+      let coord = 0;
+      if (contourXAxis === 'longitude') {
+        coord = stSamples[0]?.longitude || 0;
+      } else if (contourXAxis === 'latitude') {
+        coord = stSamples[0]?.latitude || 0;
+      } else {
+        coord = activeStations2D.indexOf(st);
+      }
+      const count = seenCoords[coord] || 0;
+      seenCoords[coord] = count + 1;
+      const jitter = count * 0.0001;
+      jitteredCoords[st] = coord + jitter;
+    });
+    return jitteredCoords;
+  }, [activeStations2D, processedSamples, contourXAxis]);
+
+  useEffect(() => {
+    if (visSubTab !== 'contour2d' || activeStations2D.length < 2) {
+      setHighResBathyPoints([]);
+      return;
+    }
+
+    let isCancelled = false;
+    setLoadingBathy(true);
+
+    async function fetchBathy() {
+      const validSamples = processedSamples.filter(
+        s => s.station !== null && s.depth !== null && !s.isRejected && !s.isBlank && !s.isStd
+      );
+      
+      const getStationCoords = (st: string) => {
+        const normSt = normalizeStationName(st);
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        if (sc) return { latitude: sc.latitude, longitude: sc.longitude };
+
+        const usc = uniqueStationCoords.find(c => normalizeStationName(c.station) === normSt);
+        if (usc) return { latitude: usc.latitude, longitude: usc.longitude };
+
+        const sample = processedSamples.find(s => normalizeStationName(s.station) === normSt);
+        if (sample) return { latitude: sample.latitude || 0, longitude: sample.longitude || 0 };
+
+        return { latitude: 0, longitude: 0 };
+      };
+
+      const getStationBaselineDepth = (st: string) => {
+        const normSt = normalizeStationName(st);
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        if (sc && sc.botDepth !== undefined) return sc.botDepth;
+
+        const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
+        const maxSampleDepth = stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 0;
+        return maxSampleDepth > 0 ? maxSampleDepth : 100;
+      };
+
+      const numSegments = activeStations2D.length - 1;
+      const stepsPerSegment = numSegments > 0 ? Math.max(1, Math.floor(80 / numSegments)) : 1;
+
+      interface TrackPoint {
+        latitude: number;
+        longitude: number;
+        xVal: number;
+        fallbackDepth: number;
+      }
+
+      const trackPoints: TrackPoint[] = [];
+
+      for (let i = 0; i < numSegments; i++) {
+        const st1 = activeStations2D[i];
+        const st2 = activeStations2D[i + 1];
+
+        const coord1 = getStationCoords(st1);
+        const coord2 = getStationCoords(st2);
+
+        const d1 = getStationBaselineDepth(st1);
+        const d2 = getStationBaselineDepth(st2);
+
+        const x1 = stationJitteredCoords2D[st1] || 0;
+        const x2 = stationJitteredCoords2D[st2] || 0;
+
+        const startT = (i === 0) ? 0 : (1 / stepsPerSegment);
+        for (let j = Math.round(startT * stepsPerSegment); j <= stepsPerSegment; j++) {
+          const t = j / stepsPerSegment;
+          trackPoints.push({
+            latitude: coord1.latitude + (coord2.latitude - coord1.latitude) * t,
+            longitude: coord1.longitude + (coord2.longitude - coord1.longitude) * t,
+            xVal: x1 + (x2 - x1) * t,
+            fallbackDepth: d1 + (d2 - d1) * t
+          });
+        }
+      }
+
+      if (trackPoints.length === 0) {
+        if (!isCancelled) {
+          setHighResBathyPoints([]);
+          setLoadingBathy(false);
+        }
+        return;
+      }
+
+      const fetchedPoints: { xVal: number; depth: number }[] = [];
+      const CHUNK_SIZE = 100;
+
+      try {
+        for (let idx = 0; idx < trackPoints.length; idx += CHUNK_SIZE) {
+          if (isCancelled) return;
+          const chunk = trackPoints.slice(idx, idx + CHUNK_SIZE);
+          const locationsParam = chunk
+            .map(p => `${p.latitude},${p.longitude}`)
+            .join('|');
+
+          const response = await fetch(
+            `/api-bathy/v1/gebco2020?locations=${encodeURIComponent(locationsParam)}`
+          );
+
+          if (!response.ok) {
+            throw new Error(`HTTP error ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (data && Array.isArray(data.results)) {
+            data.results.forEach((res: any, resIdx: number) => {
+              const pt = chunk[resIdx];
+              const depth = res.elevation !== null ? Math.abs(res.elevation) : pt.fallbackDepth;
+              fetchedPoints.push({
+                xVal: pt.xVal,
+                depth: depth
+              });
+            });
+          } else {
+            throw new Error("Invalid API response format");
+          }
+
+          if (idx + CHUNK_SIZE < trackPoints.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+
+        if (!isCancelled) {
+          setHighResBathyPoints(fetchedPoints);
+          setLoadingBathy(false);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch high-res bathymetry, falling back to local interpolation:", err);
+        if (!isCancelled) {
+          setHighResBathyPoints(trackPoints.map(p => ({
+            xVal: p.xVal,
+            depth: p.fallbackDepth
+          })));
+          setLoadingBathy(false);
+        }
+      }
+    }
+
+    fetchBathy();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [visSubTab, activeStations2D, stationCoords, processedSamples, uniqueStationCoords, contourXAxis, stationJitteredCoords2D]);
 
   useEffect(() => {
     if (!selectedStation && sortedStationsList.length > 0) {
@@ -859,22 +1039,32 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
   // Compute data bounds
   const dataBounds = useMemo(() => {
-    const valid = processedSamples.filter(s => s.station !== null && s.depth !== null && !s.isRejected);
+    const valid = processedSamples.filter(s => s.station !== null && s.depth !== null && !s.isRejected && !s.isStd && !s.isBlank);
     if (valid.length === 0) {
       return { minDepth: 0, maxDepth: 1000, minLon: 30, maxLon: 120, minLat: -40, maxLat: 20 };
     }
     const depths = valid.map(s => s.depth as number);
     const lons = valid.map(s => s.longitude || 0);
     const lats = valid.map(s => s.latitude || 0);
+
+    const activeNormNames = Array.from(new Set(valid.map(s => normalizeStationName(s.station))));
+    const activeBottomDepths = stationCoords
+      .filter(c => activeNormNames.includes(normalizeStationName(c.station)))
+      .map(c => c.botDepth || 0);
+
+    const maxBathyDepth = highResBathyPoints.length > 0
+      ? Math.max(...highResBathyPoints.map(p => p.depth))
+      : 0;
+
     return {
       minDepth: 0,
-      maxDepth: Math.max(...depths, 100),
+      maxDepth: Math.max(...depths, ...activeBottomDepths, maxBathyDepth, 100),
       minLon: Math.min(...lons),
       maxLon: Math.max(...lons),
       minLat: Math.min(...lats),
       maxLat: Math.max(...lats)
     };
-  }, [processedSamples]);
+  }, [processedSamples, stationCoords, highResBathyPoints]);
 
   const prevBoundsRef = useRef(dataBounds);
   useEffect(() => {
@@ -1364,28 +1554,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const minIdx = Math.min(startIdx, endIdx);
     const maxIdx = Math.max(startIdx, endIdx);
 
-    const activeStations = sortedStationsList.filter((_, idx) => idx >= minIdx && idx <= maxIdx);
-
-    const stationJitteredCoords: Record<string, number> = {};
-    const seenCoords: Record<number, number> = {};
-    activeStations.forEach(st => {
-      const stSamples = validSamples.filter(s => s.station === st);
-      let coord = 0;
-      if (contourXAxis === 'longitude') {
-        coord = stSamples[0]?.longitude || 0;
-      } else if (contourXAxis === 'latitude') {
-        coord = stSamples[0]?.latitude || 0;
-      } else {
-        coord = activeStations.indexOf(st);
-      }
-      const count = seenCoords[coord] || 0;
-      seenCoords[coord] = count + 1;
-      const jitter = count * 0.0001;
-      stationJitteredCoords[st] = coord + jitter;
-    });
-
     const getXValue = (s: typeof validSamples[0]) => {
-      return stationJitteredCoords[s.station!] || 0;
+      return stationJitteredCoords2D[s.station!] || 0;
     };
 
     const filteredSamples = validSamples.filter(s => {
@@ -1577,12 +1747,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const ticksCount = 5;
     const labelsList = [];
     if (contourXAxis === 'station') {
-      const step = Math.max(1, Math.floor(activeStations.length / ticksCount));
-      for (let i = 0; i < activeStations.length; i += step) {
+      const step = Math.max(1, Math.floor(activeStations2D.length / ticksCount));
+      for (let i = 0; i < activeStations2D.length; i += step) {
         labelsList.push({
-          x: (i / (activeStations.length - 1 || 1)) * canvasWidth,
+          x: (i / (activeStations2D.length - 1 || 1)) * canvasWidth,
           y: 0,
-          name: activeStations[i]!
+          name: activeStations2D[i]!
         });
       }
     } else {
@@ -1599,18 +1769,28 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     }
     setInterpolatedPoints(labelsList);
 
-    const bathyPoints = activeStations.map(st => {
-      const stSamples = validSamples.filter(s => s.station === st);
-      const normSt = normalizeStationName(st);
-      const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
-      const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
-        || Math.max(...stSamples.map(s => s.depth || 0), 100);
+    let bathyPoints: { cx: number; cy: number }[] = [];
 
-      const xVal = stationJitteredCoords[st] || 0;
-      const cx = ((xVal - minX) / xSpan) * canvasWidth;
-      const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
-      return { cx, cy };
-    });
+    if (highResBathyPoints && highResBathyPoints.length > 0) {
+      bathyPoints = highResBathyPoints.map(pt => {
+        const cx = ((pt.xVal - minX) / xSpan) * canvasWidth;
+        const cy = ((pt.depth - minY) / ySpan) * canvasHeight;
+        return { cx, cy };
+      });
+    } else {
+      bathyPoints = activeStations2D.map(st => {
+        const stSamples = validSamples.filter(s => s.station === st);
+        const normSt = normalizeStationName(st);
+        const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
+        const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
+          || Math.max(...stSamples.map(s => s.depth || 0), 100);
+
+        const xVal = stationJitteredCoords2D[st] || 0;
+        const cx = ((xVal - minX) / xSpan) * canvasWidth;
+        const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
+        return { cx, cy };
+      });
+    }
 
     bathyPoints.sort((a, b) => a.cx - b.cx);
 
@@ -1626,13 +1806,13 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     }
     setBathyPath(pathStr);
 
-    const ticks = activeStations.map(st => {
-      const xVal = stationJitteredCoords[st] || 0;
+    const ticks = activeStations2D.map(st => {
+      const xVal = stationJitteredCoords2D[st] || 0;
       const cx = ((xVal - minX) / xSpan) * canvasWidth;
       return { name: st || '', cx };
     });
     setTopStationTicks(ticks);
-  }, [canvasElement, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, contourStartStation, contourEndStation, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance]);
+  }, [canvasElement, processedSamples, docMin, docMax, contourStep, idwPower, anisotropyFactor, contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, contourStartStation, contourEndStation, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
 
   // Calculate adaptive axis and legend title variables
   const maxDepthLabelLength = Math.max(...[0.0, 0.25, 0.5, 0.75, 1.0].map(r => (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0).length));
@@ -3081,6 +3261,19 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 <div className={`tab-btn ${visSettingsTab === 'data' ? 'active' : ''}`} onClick={() => setVisSettingsTab('data')}>数据过滤</div>
                 <div className={`tab-btn ${visSettingsTab === 'style' ? 'active' : ''}`} onClick={() => setVisSettingsTab('style')}>学术样式</div>
               </div>
+
+              {loadingBathy && (
+                <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', padding: '4px 8px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '4px' }}>
+                  <div className="animate-spin" style={{ display: 'inline-block', width: '10px', height: '10px', border: '1.5px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%' }} />
+                  正在在线获取 GEBCO 高精度洋底地形...
+                </div>
+              )}
+              {!loadingBathy && highResBathyPoints.length > 0 && (
+                <div style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px', padding: '4px 8px', backgroundColor: '#ecfdf5', borderRadius: '4px' }}>
+                  <span style={{ display: 'inline-block', width: '6px', height: '6px', backgroundColor: '#10b981', borderRadius: '50%' }} />
+                  已启用 GEBCO 在线高精度洋底地形
+                </div>
+              )}
 
               {visSettingsTab === 'data' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
