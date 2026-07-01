@@ -883,12 +883,37 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             .map(p => `${p.latitude},${p.longitude}`)
             .join('|');
 
-          const response = await fetch(
-            `/api-bathy/v1/gebco2020?locations=${encodeURIComponent(locationsParam)}`
-          );
+          let response: Response | null = null;
+          let fetchErr: any = null;
 
-          if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}`);
+          // 1. Try local Vite proxy first
+          try {
+            response = await fetch(
+              `/api-bathy/v1/gebco2020?locations=${encodeURIComponent(locationsParam)}`
+            );
+          } catch (e) {
+            fetchErr = e;
+          }
+
+          // 2. If local proxy returned 404 (production) or failed, fallback to CORS proxies
+          if (!response || response.status === 404) {
+            const target = `https://api.opentopodata.org/v1/gebco2020?locations=${encodeURIComponent(locationsParam)}`;
+            
+            // Try corsproxy.io
+            try {
+              response = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(target)}`);
+            } catch (e1) {
+              // Try api.allorigins.win as second fallback
+              try {
+                response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
+              } catch (e2) {
+                throw new Error("All CORS proxies failed: " + (fetchErr || e1 || e2));
+              }
+            }
+          }
+
+          if (!response || !response.ok) {
+            throw new Error(`HTTP error ${response ? response.status : 'unknown'}`);
           }
 
           const data = await response.json();

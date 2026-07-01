@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api-bathy/:path*",
+      "destination": "https://api.opentopodata.org/:path*"
+    }
+  ]
+}
