@@ -5,8 +5,8 @@ import {
 } from 'lucide-react';
 import { parseRawTxt } from './utils/parser';
 import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev } from './utils/calc';
-import { parseStationCoordinates, normalizeStationName } from './utils/stationParser';
-import { RawInjection, SampleGroup, ExcelSampleInfo } from './types';
+import { parseStationCoordinates, normalizeStationName, parseHydrologicalExcel } from './utils/stationParser';
+import { RawInjection, SampleGroup, ExcelSampleInfo, HydrologicalSample } from './types';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend
@@ -34,6 +34,11 @@ export default function App() {
   const [files, setFiles] = useState<{ name: string; size: number }[]>(() => loadSavedState('ocean_files', []));
   const [rawInjections, setRawInjections] = useState<RawInjection[]>(() => loadSavedState('ocean_rawInjections', []));
   const [stationCoords, setStationCoords] = useState<ExcelSampleInfo[]>(() => loadSavedState('ocean_stationCoords', []));
+  const [hydroSamples, setHydroSamples] = useState<HydrologicalSample[]>(() => loadSavedState('ocean_hydroSamples', []));
+  const [hydroParameters, setHydroParameters] = useState<string[]>(() => loadSavedState('ocean_hydroParameters', []));
+  const [hydroSheetNames, setHydroSheetNames] = useState<string[]>(() => loadSavedState('ocean_hydroSheetNames', []));
+  const [hydroSelectedSheet, setHydroSelectedSheet] = useState<string>(() => loadSavedState('ocean_hydroSelectedSheet', ''));
+  const [hydroFileBuffer, setHydroFileBuffer] = useState<ArrayBuffer | null>(null);
 
   // Standard curve parameters
   const [stdStockC, setStdStockC] = useState<number>(() => loadSavedState('ocean_stdStockC', 10000)); // standard stock concentration (µmol C / L)
@@ -113,11 +118,16 @@ export default function App() {
     localStorage.setItem('ocean_curveOffsets', JSON.stringify(curveOffsets));
     localStorage.setItem('ocean_disabledCurves', JSON.stringify(disabledCurves));
     localStorage.setItem('ocean_customStdUsedCs', JSON.stringify(customStdUsedCs));
+    localStorage.setItem('ocean_hydroSamples', JSON.stringify(hydroSamples));
+    localStorage.setItem('ocean_hydroParameters', JSON.stringify(hydroParameters));
+    localStorage.setItem('ocean_hydroSheetNames', JSON.stringify(hydroSheetNames));
+    localStorage.setItem('ocean_hydroSelectedSheet', JSON.stringify(hydroSelectedSheet));
   }, [
     currentStep, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
     excludedInjections, rejectedSamples, customSampleNames, sampleSortOrder, selectedCurveId,
-    emptyInjectionThreshold, dswMin, dswMax, sswMin, sswMax, curveOffsets, disabledCurves, customStdUsedCs
+    emptyInjectionThreshold, dswMin, dswMax, sswMin, sswMax, curveOffsets, disabledCurves, customStdUsedCs,
+    hydroSamples, hydroParameters, hydroSheetNames, hydroSelectedSheet
   ]);
 
 
@@ -269,10 +279,44 @@ export default function App() {
 
       try {
         const buffer = await file.arrayBuffer();
-        const coords = parseStationCoordinates(buffer);
-        if (coords.length > 0) {
-          const coordsWithFile = coords.map(c => ({ ...c, fileName: file.name }));
-          newCoords = [...newCoords, ...coordsWithFile];
+        
+        // Check if workbook contains CTD/hydrological data sheets or columns
+        const data = new Uint8Array(buffer);
+        const workbook = xlsx.read(data, { type: 'array' });
+        const sheetNames = workbook.SheetNames;
+        
+        let isHydro = sheetNames.some(name => 
+          name.toLowerCase().includes('ctd') || name.toLowerCase().includes('stst') || name.includes('基础数据')
+        );
+        
+        // Double check by reading first sheet's headers
+        if (!isHydro && sheetNames.length > 0) {
+          const firstSheet = workbook.Sheets[sheetNames[0]];
+          const jsonRows = xlsx.utils.sheet_to_json<any>(firstSheet, { header: 1 });
+          if (jsonRows.length > 0) {
+            const headers = jsonRows.find(row => Array.isArray(row) && row.some(cell => cell && cell.toString().toLowerCase().includes('station')));
+            if (headers) {
+              const hLower = headers.map((h: any) => h ? h.toString().toLowerCase() : '');
+              isHydro = hLower.some((h: string) => h.includes('salinity') || h.includes('oxygen') || h.includes('temperature') || h.includes('盐度') || h.includes('溶解氧') || h.includes('温度'));
+            }
+          }
+        }
+
+        if (isHydro) {
+          const result = parseHydrologicalExcel(buffer);
+          if (result.samples.length > 0) {
+            setHydroSamples(result.samples);
+            setHydroParameters(result.parameters);
+            setHydroSheetNames(result.sheetNames);
+            setHydroSelectedSheet(result.selectedSheet);
+            setHydroFileBuffer(buffer);
+          }
+        } else {
+          const coords = parseStationCoordinates(buffer);
+          if (coords.length > 0) {
+            const coordsWithFile = coords.map(c => ({ ...c, fileName: file.name }));
+            newCoords = [...newCoords, ...coordsWithFile];
+          }
         }
       } catch (err) {
         console.error("Error parsing station coordinates file:", err);
@@ -302,6 +346,17 @@ export default function App() {
     }
   };
 
+  const handleHydroSheetChange = (sheetName: string) => {
+    if (hydroFileBuffer) {
+      const result = parseHydrologicalExcel(hydroFileBuffer, sheetName);
+      if (result.samples.length > 0) {
+        setHydroSamples(result.samples);
+        setHydroParameters(result.parameters);
+        setHydroSelectedSheet(result.selectedSheet);
+      }
+    }
+  };
+
   const clearAllData = () => {
     setFiles([]);
     setRawInjections([]);
@@ -319,6 +374,11 @@ export default function App() {
     setSswMax(80);
     setCurveOffsets({});
     setCurrentStep(1);
+    setHydroSamples([]);
+    setHydroParameters([]);
+    setHydroSheetNames([]);
+    setHydroSelectedSheet('');
+    setHydroFileBuffer(null);
 
     // Clean up localStorage to prevent lingering data
     const keys = [
@@ -331,7 +391,8 @@ export default function App() {
       'ocean_anisotropyFactor', 'ocean_contourXAxis', 'ocean_minDepthFilter',
       'ocean_maxDepthFilter', 'ocean_minXFilter', 'ocean_maxXFilter', 'ocean_showBackgroundMap',
       'ocean_chart_styles', 'ocean_visSettingsTab',
-      'ocean_dswMin', 'ocean_dswMax', 'ocean_sswMin', 'ocean_sswMax', 'ocean_curveOffsets', 'ocean_disabledCurves', 'ocean_customStdUsedCs'
+      'ocean_dswMin', 'ocean_dswMax', 'ocean_sswMin', 'ocean_sswMax', 'ocean_curveOffsets', 'ocean_disabledCurves', 'ocean_customStdUsedCs',
+      'ocean_hydroSamples', 'ocean_hydroParameters', 'ocean_hydroSheetNames', 'ocean_hydroSelectedSheet'
     ];
     keys.forEach(k => localStorage.removeItem(k));
   };
@@ -369,6 +430,14 @@ export default function App() {
       });
       return copy;
     });
+
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || fileName.endsWith('.csv')) {
+      setHydroSamples([]);
+      setHydroParameters([]);
+      setHydroSheetNames([]);
+      setHydroSelectedSheet('');
+      setHydroFileBuffer(null);
+    }
   };
 
   // Group raw injections into Sample Groups
@@ -1086,9 +1155,11 @@ export default function App() {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                           <span className={`badge ${isCoordinateFile ? 'badge-success' : 'badge-info'}`}>
-                            {isCoordinateFile
-                              ? `已解析 ${uniqueStsCount} 个站位 (${fileCoords.length} 行样品经纬度)`
-                              : `已解析 ${rawInjections.filter(inj => inj.fileName === file.name).length} 行数据`
+                            {hydroSamples.length > 0 && isCoordinateFile
+                              ? `已解析 ${new Set(hydroSamples.map(s => s.station)).size} 个站位 (${hydroSamples.length} 行水文数据)`
+                              : isCoordinateFile
+                                ? `已解析 ${uniqueStsCount} 个站位 (${fileCoords.length} 行样品经纬度)`
+                                : `已解析 ${rawInjections.filter(inj => inj.fileName === file.name).length} 行数据`
                             }
                           </span>
                           <button
@@ -1125,87 +1196,143 @@ export default function App() {
               </div>
             )}
 
-            <div className="grid-2">
-              <div className="card">
-                <h3 className="card-title">
-                  <Settings size={18} className="text-slate-500" />
-                  <span>工作曲线参数配置</span>
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  <div className="grid-3" style={{ gap: '12px' }}>
-                    <div className="input-group" style={{ marginBottom: 0 }}>
-                      <label className="input-label">标准储备液浓度 (µmol C / L)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={stdStockC}
-                        onChange={e => handleStdStockCChange(parseFloat(e.target.value) || 0)}
-                        step="any"
-                      />
-                    </div>
-                    <div className="input-group" style={{ marginBottom: 0 }}>
-                      <label className="input-label">配置稀释倍数 (转为使用浓度)</label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={stdDilutionFactor}
-                        onChange={e => handleStdDilutionFactorChange(parseFloat(e.target.value) || 0)}
-                        step="any"
-                      />
-                    </div>
-                    <div className="input-group" style={{ marginBottom: 0 }}>
-                      <label className="input-label">使用浓度 (µmol C / L)</label>
-                      <input
-                        type="number"
-                        className="input-field font-semibold text-sky-600 bg-sky-50/10"
-                        value={stdUsedC}
-                        onChange={e => handleStdUsedCChange(parseFloat(e.target.value) || 0)}
-                        step="any"
-                      />
+            {hydroSamples.length > 0 ? (
+              <div className="grid-2">
+                <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <h3 className="card-title">
+                    <Settings size={18} className="text-slate-500" />
+                    <span>常规水文数据表切换</span>
+                  </h3>
+                  <div className="input-group" style={{ marginBottom: 0 }}>
+                    <label className="input-label" style={{ fontWeight: 'bold' }}>当前活动工作表 (Active Sheet)</label>
+                    <select
+                      className="input-field"
+                      value={hydroSelectedSheet}
+                      onChange={(e) => handleHydroSheetChange(e.target.value)}
+                      style={{ width: '100%' }}
+                    >
+                      {hydroSheetNames.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ marginTop: '8px' }}>
+                    <span className="text-xs text-slate-500 font-semibold">基本统计：</span>
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+                      <div style={{ flex: 1, padding: '8px 12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div className="text-xs text-slate-400">测站总数</div>
+                        <div className="text-base font-bold text-slate-700">{new Set(hydroSamples.map(s => s.station)).size} 个</div>
+                      </div>
+                      <div style={{ flex: 1, padding: '8px 12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div className="text-xs text-slate-400">数据记录数</div>
+                        <div className="text-base font-bold text-slate-700">{hydroSamples.length} 行</div>
+                      </div>
                     </div>
                   </div>
+                </div>
 
-                  <p className="text-xs text-slate-400" style={{ margin: 0 }}>
-                    ※ <strong>计算说明：</strong><code>使用浓度 = 储备液浓度 / 配置稀释倍数</code>。系统会自动在上述三者间进行联动计算。
-                  </p>
-
-                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px' }}>
-                    <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                      智能数据清洗与“扎空”异常过滤
-                    </h4>
-                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <div className="input-group" style={{ marginBottom: 0, width: '220px' }}>
-                        <label className="input-label" style={{ fontSize: '12px', fontWeight: 600 }}>扎空判定面积阈值 (Area)</label>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', gap: '16px', padding: '24px', background: 'linear-gradient(135deg, #f0fdf4 0%, #e8f5e9 100%)', border: '1px solid #a7f3d0' }}>
+                  <CheckCircle size={48} className="text-emerald-500" />
+                  <div>
+                    <h3 className="font-semibold text-lg text-emerald-800" style={{ margin: '0 0 4px' }}>
+                      多参数水文绘图模式已激活
+                    </h3>
+                    <p className="text-xs text-emerald-700 mb-4" style={{ maxWidth: '320px', margin: '0 auto 12px' }}>
+                      系统已成功从工作表 <strong>{hydroSelectedSheet}</strong> 中解析出 {hydroParameters.length} 个水文参数。
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'center', maxHeight: '110px', overflowY: 'auto', padding: '4px' }}>
+                      {hydroParameters.map((p, idx) => (
+                        <span key={idx} className="badge badge-success" style={{ fontSize: '10px', padding: '3px 6px' }}>
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="grid-2">
+                <div className="card">
+                  <h3 className="card-title">
+                    <Settings size={18} className="text-slate-500" />
+                    <span>工作曲线参数配置</span>
+                  </h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className="grid-3" style={{ gap: '12px' }}>
+                      <div className="input-group" style={{ marginBottom: 0 }}>
+                        <label className="input-label">标准储备液浓度 (µmol C / L)</label>
                         <input
                           type="number"
                           className="input-field"
-                          value={emptyInjectionThreshold}
-                          onChange={e => setEmptyInjectionThreshold(parseFloat(e.target.value) || 0)}
-                          step="0.05"
+                          value={stdStockC}
+                          onChange={e => handleStdStockCChange(parseFloat(e.target.value) || 0)}
+                          step="any"
                         />
                       </div>
-                      <p className="text-xs text-slate-400" style={{ margin: 0, flex: 1, minWidth: '240px' }}>
-                        ※ <strong>清洗规则：</strong>DOC 测定进样时，若发生空针、吸气泡（扎空）等异常现象，峰面积通常会接近 0（正常水样一般在 1.0 以上）。低于该阈值的进样数据会被<strong>自动排除</strong>，不参与均值计算，确保结果可靠。
-                      </p>
+                      <div className="input-group" style={{ marginBottom: 0 }}>
+                        <label className="input-label">配置稀释倍数 (转为使用浓度)</label>
+                        <input
+                          type="number"
+                          className="input-field"
+                          value={stdDilutionFactor}
+                          onChange={e => handleStdDilutionFactorChange(parseFloat(e.target.value) || 0)}
+                          step="any"
+                        />
+                      </div>
+                      <div className="input-group" style={{ marginBottom: 0 }}>
+                        <label className="input-label">使用浓度 (µmol C / L)</label>
+                        <input
+                          type="number"
+                          className="input-field font-semibold text-sky-600 bg-sky-50/10"
+                          value={stdUsedC}
+                          onChange={e => handleStdUsedCChange(parseFloat(e.target.value) || 0)}
+                          step="any"
+                        />
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-400" style={{ margin: 0 }}>
+                      ※ <strong>计算说明：</strong><code>使用浓度 = 储备液浓度 / 配置稀释倍数</code>。系统会自动在上述三者间进行联动计算。
+                    </p>
+
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '16px' }}>
+                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        智能数据清洗与“扎空”异常过滤
+                      </h4>
+                      <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div className="input-group" style={{ marginBottom: 0, width: '220px' }}>
+                          <label className="input-label" style={{ fontSize: '12px', fontWeight: 600 }}>扎空判定面积阈值 (Area)</label>
+                          <input
+                            type="number"
+                            className="input-field"
+                            value={emptyInjectionThreshold}
+                            onChange={e => setEmptyInjectionThreshold(parseFloat(e.target.value) || 0)}
+                            step="0.05"
+                          />
+                        </div>
+                        <p className="text-xs text-slate-400" style={{ margin: 0, flex: 1, minWidth: '240px' }}>
+                          ※ <strong>清洗规则：</strong>DOC 测定进样时，若发生空针、吸气泡（扎空）等异常现象，峰面积通常会接近 0（正常水样一般在 1.0 以上）。低于该阈值的进样数据会被<strong>自动排除</strong>，不参与均值计算，确保结果可靠。
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', gap: '16px' }}>
-                <CheckCircle size={48} className={rawInjections.length > 0 ? "text-emerald-500" : "text-slate-300"} />
-                <div>
-                  <h3 className="font-semibold text-lg" style={{ margin: '0 0 4px' }}>
-                    {rawInjections.length > 0 ? "数据就绪" : "待上传数据"}
-                  </h3>
-                  <p className="text-sm text-slate-500" style={{ maxWidth: '300px', margin: '0 auto' }}>
-                    {rawInjections.length > 0
-                      ? `已成功加载了 ${processedSamples.length} 个独立样品的测量数据，点击下一步进行拟合曲线校验。`
-                      : "请在上方上传仪器输出的 txt 数据。系统支持自动识别各种编码。"}
-                  </p>
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', gap: '16px' }}>
+                  <CheckCircle size={48} className={rawInjections.length > 0 ? "text-emerald-500" : "text-slate-300"} />
+                  <div>
+                    <h3 className="font-semibold text-lg" style={{ margin: '0 0 4px' }}>
+                      {rawInjections.length > 0 ? "数据就绪" : "待上传数据"}
+                    </h3>
+                    <p className="text-sm text-slate-500" style={{ maxWidth: '300px', margin: '0 auto' }}>
+                      {rawInjections.length > 0
+                        ? `已成功加载了 ${processedSamples.length} 个独立样品的测量数据，点击下一步进行拟合曲线校验。`
+                        : "请在上方上传仪器输出的 txt 数据。系统支持自动识别各种编码。"}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -2265,6 +2392,8 @@ export default function App() {
             <OriginPlotter
               processedSamples={processedSamples}
               stationCoords={stationCoords}
+              hydroSamples={hydroSamples}
+              hydroParameters={hydroParameters}
             />
           </div>
         )}
@@ -2306,7 +2435,13 @@ export default function App() {
         <div className="wizard-footer">
           <button
             className="btn btn-secondary"
-            onClick={() => currentStep > 1 && setCurrentStep(prev => prev - 1)}
+            onClick={() => {
+              if (currentStep === 4 && hydroSamples.length > 0) {
+                setCurrentStep(1);
+              } else {
+                setCurrentStep(prev => prev - 1);
+              }
+            }}
             disabled={currentStep === 1}
           >
             <ChevronLeft size={16} />
@@ -2315,11 +2450,18 @@ export default function App() {
 
           <button
             className="btn btn-primary"
-            onClick={() => currentStep < 5 && setCurrentStep(prev => prev + 1)}
+            onClick={() => {
+              if (currentStep === 1 && hydroSamples.length > 0) {
+                setCurrentStep(4);
+              } else {
+                setCurrentStep(prev => prev + 1);
+              }
+            }}
             disabled={
-              (currentStep === 1 && files.length === 0) ||
+              (currentStep === 1 && files.length === 0 && hydroSamples.length === 0) ||
               (currentStep === 2 && !(calibrationCurve.slope > 0)) ||
-              currentStep === 5
+              currentStep === 5 ||
+              (currentStep === 4 && hydroSamples.length > 0)
             }
           >
             <span>下一步</span>

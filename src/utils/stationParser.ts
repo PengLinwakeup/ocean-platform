@@ -1,5 +1,7 @@
 import * as xlsx from 'xlsx';
-import { ExcelSampleInfo } from '../types';
+import { ExcelSampleInfo, HydrologicalSample } from '../types';
+
+
 
 /**
  * Standardizes station name or label ID for comparison.
@@ -148,3 +150,146 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
   
   return sampleInfos;
 }
+
+export interface HydrologicalParseResult {
+  sheetNames: string[];
+  selectedSheet: string;
+  parameters: string[];
+  samples: HydrologicalSample[];
+}
+
+export function parseHydrologicalExcel(
+  arrayBuffer: ArrayBuffer,
+  targetSheetName?: string
+): HydrologicalParseResult {
+  const data = new Uint8Array(arrayBuffer);
+  const workbook = xlsx.read(data, { type: 'array' });
+  const sheetNames = workbook.SheetNames;
+  
+  if (sheetNames.length === 0) {
+    return { sheetNames: [], selectedSheet: '', parameters: [], samples: [] };
+  }
+  
+  const selectedSheet = targetSheetName && sheetNames.includes(targetSheetName) 
+    ? targetSheetName 
+    : (sheetNames.includes('All StStCTD') ? 'All StStCTD' : sheetNames[0]);
+    
+  const worksheet = workbook.Sheets[selectedSheet];
+  const jsonRows = xlsx.utils.sheet_to_json<any>(worksheet, { header: 1 });
+  
+  if (jsonRows.length === 0) {
+    return { sheetNames, selectedSheet, parameters: [], samples: [] };
+  }
+  
+  // Find header row and column mappings
+  let headerRowIndex = -1;
+  for (let r = 0; r < Math.min(jsonRows.length, 10); r++) {
+    const row = jsonRows[r];
+    if (!Array.isArray(row)) continue;
+    const hasSt = row.some(cell => cell && cell.toString().toLowerCase().includes('station'));
+    const hasLon = row.some(cell => cell && cell.toString().toLowerCase().includes('longitude'));
+    if (hasSt && hasLon) {
+      headerRowIndex = r;
+      break;
+    }
+  }
+  
+  if (headerRowIndex === -1) {
+    headerRowIndex = 0; // fallback
+  }
+  
+  const headers = jsonRows[headerRowIndex] as any[];
+  if (!headers || !headers.length) {
+    return { sheetNames, selectedSheet, parameters: [], samples: [] };
+  }
+  
+  // Find key columns
+  const stationCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'station');
+  const shipStnCol = headers.findIndex(h => h && h.toString().toLowerCase().replace(/[^a-z0-9]/g, '').includes('shipstn'));
+  const latCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('latitude'));
+  const lonCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('longitude'));
+  const depthCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('depth'));
+  const pressCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('pressure'));
+  
+  // Excluded headers for parameter list
+  const excludedHeaders = [
+    'station', 'cast', 'sample no', 'ctd cast no', 'ship stn. no.', 'ship stn no', 'niskin bottle no', 'niskin bottle no.',
+    'depth', 'pressure', 'latitude', 'longitude', 'year', 'month', 'day', 'hour', 'minute', 'second', 'flag'
+  ];
+  
+  const parameters: string[] = [];
+  const colIndices: { [key: string]: number } = {};
+  
+  headers.forEach((h, idx) => {
+    if (!h) return;
+    const hStr = h.toString();
+    const hLower = hStr.toLowerCase();
+    
+    // Check if it's an excluded column
+    const isExcluded = excludedHeaders.some(ex => hLower.includes(ex));
+    if (!isExcluded) {
+      parameters.push(hStr);
+      colIndices[hStr] = idx;
+    }
+  });
+  
+  const samples: HydrologicalSample[] = [];
+  for (let r = headerRowIndex + 1; r < jsonRows.length; r++) {
+    const row = jsonRows[r];
+    if (!Array.isArray(row)) continue;
+    
+    const rawSt = stationCol !== -1 ? row[stationCol] : undefined;
+    const rawLat = latCol !== -1 ? row[latCol] : undefined;
+    const rawLon = lonCol !== -1 ? row[lonCol] : undefined;
+    const rawDepth = depthCol !== -1 ? row[depthCol] : undefined;
+    const rawPress = pressCol !== -1 ? row[pressCol] : undefined;
+    
+    if (rawSt === undefined || rawLat === undefined || rawLon === undefined) {
+      continue;
+    }
+    
+    let station = rawSt.toString().trim();
+    if (shipStnCol !== -1 && row[shipStnCol]) {
+      const shipStn = row[shipStnCol].toString().trim();
+      if (shipStn && shipStn.toLowerCase() !== 'ship_stn_unknown') {
+        station = shipStn;
+      }
+    }
+    
+    const latitude = parseFloat(rawLat);
+    const longitude = parseFloat(rawLon);
+    const depth = rawDepth !== undefined ? parseFloat(rawDepth) : 0;
+    const pressure = rawPress !== undefined ? parseFloat(rawPress) : depth; // fallback pressure to depth
+    
+    if (!station || isNaN(latitude) || isNaN(longitude)) {
+      continue;
+    }
+    
+    const values: Record<string, number> = {};
+    parameters.forEach(p => {
+      const idx = colIndices[p];
+      const val = parseFloat(row[idx]);
+      if (!isNaN(val)) {
+        values[p] = val;
+      }
+    });
+    
+    samples.push({
+      id: `${selectedSheet}_r${r}_st${station}_d${depth}`,
+      station,
+      latitude,
+      longitude,
+      depth: isNaN(depth) ? 0 : depth,
+      pressure: isNaN(pressure) ? 0 : pressure,
+      values
+    });
+  }
+  
+  return {
+    sheetNames,
+    selectedSheet,
+    parameters,
+    samples
+  };
+}
+

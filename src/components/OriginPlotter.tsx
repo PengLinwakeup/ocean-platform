@@ -11,7 +11,7 @@ import { scaleLinear } from 'd3-scale';
 import { curveCardinal } from 'd3-shape';
 import { normalizeStationName } from '../utils/stationParser';
 import { interpolateIDW } from '../utils/calc';
-import { ExcelSampleInfo } from '../types';
+import { ExcelSampleInfo, HydrologicalSample } from '../types';
 
 const loadSavedState = <T,>(key: string, defaultValue: T): T => {
   try {
@@ -232,10 +232,124 @@ interface ProcessedSample {
 interface OriginPlotterProps {
   processedSamples: ProcessedSample[];
   stationCoords: ExcelSampleInfo[];
+  hydroSamples?: HydrologicalSample[];
+  hydroParameters?: string[];
 }
 
-export default function OriginPlotter({ processedSamples, stationCoords }: OriginPlotterProps) {
+function getAdaptiveBounds(values: number[]): { min: number; max: number; step: number } {
+  if (values.length === 0) return { min: 0, max: 100, step: 10 };
+  const sorted = [...values].sort((a, b) => a - b);
+  
+  // Robust scaling: 2nd and 98th percentile
+  const p2Idx = Math.floor(sorted.length * 0.02);
+  const p98Idx = Math.floor(sorted.length * 0.98);
+  
+  let min = sorted[p2Idx];
+  let max = sorted[p98Idx];
+  
+  if (min === max) {
+    min = sorted[0];
+    max = sorted[sorted.length - 1];
+  }
+  if (min === max) {
+    max = min + 1;
+  }
+  
+  const range = max - min;
+  const step = range / 10;
+  
+  return {
+    min: parseFloat(min.toFixed(2)),
+    max: parseFloat(max.toFixed(2)),
+    step: parseFloat(step.toFixed(3)) || 1
+  };
+}
+
+const STANDARD_PARAMETER_RANGES: Record<string, { min: number; max: number; step: number }> = {
+  doc: { min: 40, max: 70, step: 5 },
+  salinity: { min: 33.0, max: 36.0, step: 0.5 },
+  temperature: { min: 5.0, max: 30.0, step: 2.5 },
+  oxygen: { min: 50.0, max: 250.0, step: 20 },
+  fluorescence: { min: 0.0, max: 2.0, step: 0.2 },
+  chlorophyll: { min: 0.0, max: 2.0, step: 0.2 },
+  turbidity: { min: 0.0, max: 1.0, step: 0.1 },
+  density: { min: 1022, max: 1028, step: 0.5 },
+  phosphate: { min: 0.0, max: 3.0, step: 0.3 },
+  silicate: { min: 0.0, max: 150.0, step: 15 },
+  nitrate: { min: 0.0, max: 40.0, step: 4 }
+};
+
+function getParameterRanges(paramName: string, values: number[]): { min: number; max: number; step: number } {
+  const nameLower = paramName.toLowerCase();
+  for (const key of Object.keys(STANDARD_PARAMETER_RANGES)) {
+    if (nameLower.includes(key)) {
+      return STANDARD_PARAMETER_RANGES[key];
+    }
+  }
+  return getAdaptiveBounds(values);
+}
+
+export default function OriginPlotter({ processedSamples: originalProcessedSamples, stationCoords, hydroSamples, hydroParameters }: OriginPlotterProps) {
   const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>(() => loadSavedState<'profile1d' | 'contour2d'>('ocean_visSubTab', 'profile1d'));
+
+  const isHydroMode = !!(hydroSamples && hydroSamples.length > 0);
+
+  const allParameters = useMemo(() => {
+    const list: string[] = [];
+    const hasDocData = originalProcessedSamples && originalProcessedSamples.length > 0;
+    if (hasDocData) {
+      list.push("DOC (µmol/L)");
+    }
+    if (hydroParameters && hydroParameters.length > 0) {
+      hydroParameters.forEach(p => {
+        list.push(p);
+      });
+    }
+    return list;
+  }, [originalProcessedSamples, hydroParameters]);
+
+  const [selectedHydroParam, setSelectedHydroParam] = useState<string>(() => {
+    const saved = localStorage.getItem('ocean_selectedHydroParam');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (allParameters.includes(parsed)) return parsed;
+      } catch (e) {}
+    }
+    return allParameters[0] || '';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('ocean_selectedHydroParam', JSON.stringify(selectedHydroParam));
+  }, [selectedHydroParam]);
+
+  useEffect(() => {
+    if (allParameters.length > 0) {
+      setSelectedHydroParam(prev => allParameters.includes(prev) ? prev : allParameters[0]);
+    }
+  }, [allParameters]);
+
+  const processedSamples = useMemo(() => {
+    if (selectedHydroParam === "DOC (µmol/L)" || !isHydroMode || !hydroSamples) {
+      return originalProcessedSamples;
+    }
+    return hydroSamples.map(h => ({
+      id: h.id,
+      station: h.station,
+      depth: h.depth,
+      concentration: h.values[selectedHydroParam] !== undefined ? h.values[selectedHydroParam] : 0,
+      error: 0,
+      rsd: 0,
+      isRejected: false,
+      isBlank: false,
+      isStd: false,
+      isSeawater: false,
+      sampleName: `${h.station} (${h.depth}m)`,
+      longitude: h.longitude,
+      latitude: h.latitude
+    }));
+  }, [hydroSamples, originalProcessedSamples, selectedHydroParam, isHydroMode]);
+
   const [selectedStation, setSelectedStation] = useState<string>(() => loadSavedState('ocean_selectedStation', ''));
   const [stationMode1D, setStationMode1D] = useState<'single' | 'multi'>(() => loadSavedState<'single' | 'multi'>('ocean_stationMode1D', 'single'));
   const [selectedStationsMulti, setSelectedStationsMulti] = useState<string[]>(() => loadSavedState<string[]>('ocean_selectedStationsMulti', []));
@@ -585,6 +699,16 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
   // Unique coordinate mapping for station scatter maps
   const uniqueStationCoords = useMemo(() => {
     const uniqueMap: Record<string, { station: string; longitude: number; latitude: number }> = {};
+    
+    // First, populate from processedSamples if they contain coordinates (e.g. in hydro mode)
+    processedSamples.forEach(s => {
+      const key = normalizeStationName(s.station);
+      if (key && s.longitude !== undefined && s.latitude !== undefined && !uniqueMap[key]) {
+        uniqueMap[key] = { station: s.station!, longitude: s.longitude, latitude: s.latitude };
+      }
+    });
+
+    // Fallback to stationCoords prop
     stationCoords.forEach(c => {
       const key = normalizeStationName(c.station);
       if (key && !uniqueMap[key]) {
@@ -592,7 +716,7 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
       }
     });
     return Object.values(uniqueMap) as { station: string; longitude: number; latitude: number }[];
-  }, [stationCoords]);
+  }, [processedSamples, stationCoords]);
 
   // Derive stations list sorted naturally (e.g. S1, S2, S10)
   const sortedStationsList = useMemo(() => {
@@ -642,6 +766,97 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     }
   }, [sortedStationsList]);
 
+  useEffect(() => {
+    if (isHydroMode && selectedHydroParam) {
+      if (selectedHydroParam === "DOC (µmol/L)") {
+        // Reset to original DOC text settings and colorbar
+        setTextSettings(prev => ({
+          ...prev,
+          title: {
+            ...prev.title,
+            text: 'DOC 空间断面等值线分布图'
+          },
+          legendLabel: {
+            ...prev.legendLabel,
+            text: 'DOC 测定值'
+          },
+          colorbarTitle: {
+            ...prev.colorbarTitle,
+            text: 'DOC [µmol/L]'
+          }
+        }));
+        
+        const docValues = originalProcessedSamples.filter(s => s.station !== null && !s.isRejected && !isNaN(s.concentration)).map(s => s.concentration);
+        if (docValues.length > 0) {
+          const rangeInfo = getParameterRanges(selectedHydroParam, docValues);
+          setDocMin(rangeInfo.min);
+          setDocMax(rangeInfo.max);
+          setContourStep(rangeInfo.step);
+        }
+        return;
+      }
+
+      // Update text settings
+      setTextSettings(prev => ({
+        ...prev,
+        title: {
+          ...prev.title,
+          text: `${selectedHydroParam} 空间断面等值线分布图`
+        },
+        legendLabel: {
+          ...prev.legendLabel,
+          text: `${selectedHydroParam} 测量值`
+        },
+        colorbarTitle: {
+          ...prev.colorbarTitle,
+          text: `${selectedHydroParam}`
+        }
+      }));
+
+      // Update color bounds
+      const values = hydroSamples
+        ? hydroSamples
+            .map(h => h.values[selectedHydroParam])
+            .filter(v => v !== undefined && !isNaN(v))
+        : [];
+
+      if (values.length > 0) {
+        const rangeInfo = getParameterRanges(selectedHydroParam, values);
+        setDocMin(rangeInfo.min);
+        setDocMax(rangeInfo.max);
+        setContourStep(rangeInfo.step);
+      }
+    }
+  }, [selectedHydroParam, isHydroMode, originalProcessedSamples, hydroSamples]);
+
+  // Automatically align selectedStation and selectedStationsMulti to current active stations list
+  useEffect(() => {
+    if (sortedStationsList.length > 0) {
+      // 1. Single station reset
+      if (!sortedStationsList.includes(selectedStation)) {
+        setSelectedStation(sortedStationsList[0]);
+      }
+      
+      // 2. Multi stations reset: filter out any stations that are not in the new active list
+      setSelectedStationsMulti(prev => {
+        const valid = prev.filter(st => sortedStationsList.includes(st));
+        // If nothing is valid, default to the first few stations
+        if (valid.length === 0) {
+          return sortedStationsList.slice(0, Math.min(3, sortedStationsList.length));
+        }
+        return valid;
+      });
+
+      // 3. Start/End station reset for contour
+      if (!sortedStationsList.includes(contourStartStation)) {
+        setContourStartStation(sortedStationsList[0]);
+      }
+      if (!sortedStationsList.includes(contourEndStation)) {
+        setContourEndStation(sortedStationsList[sortedStationsList.length - 1]);
+      }
+    }
+  }, [sortedStationsList]);
+
   // Compute data bounds
   const dataBounds = useMemo(() => {
     const valid = processedSamples.filter(s => s.station !== null && s.depth !== null && !s.isRejected);
@@ -661,28 +876,48 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
     };
   }, [processedSamples]);
 
-  // Align filters to bounds when bounds or axis type change
+  const prevBoundsRef = useRef(dataBounds);
   useEffect(() => {
-    setMinDepthFilter(dataBounds.minDepth);
-    setMaxDepthFilter(dataBounds.maxDepth);
-  }, [dataBounds.minDepth, dataBounds.maxDepth]);
+    // Only reset depth filters if the old filter matched the old full bounds (meaning user hadn't customized it)
+    // or if the filter is set to defaults
+    const isMinAtPrevMax = minDepthFilter === prevBoundsRef.current.minDepth;
+    const isMaxAtPrevMax = maxDepthFilter === prevBoundsRef.current.maxDepth;
+    const isDefault = minDepthFilter === 0 && maxDepthFilter === 6000;
+    
+    if (isMinAtPrevMax || isDefault) {
+      setMinDepthFilter(dataBounds.minDepth);
+    }
+    if (isMaxAtPrevMax || isDefault) {
+      setMaxDepthFilter(dataBounds.maxDepth);
+    }
+    prevBoundsRef.current = dataBounds;
+  }, [dataBounds]);
 
+  const prevXBoundsRef = useRef({ minLon: dataBounds.minLon, maxLon: dataBounds.maxLon, minLat: dataBounds.minLat, maxLat: dataBounds.maxLat });
   useEffect(() => {
     if (contourXAxis === 'longitude') {
-      setMinXFilter(dataBounds.minLon);
-      setMaxXFilter(dataBounds.maxLon);
-      setContourStartStation('');
-      setContourEndStation('');
+      const isMinAtPrev = minXFilter === prevXBoundsRef.current.minLon;
+      const isMaxAtPrev = maxXFilter === prevXBoundsRef.current.maxLon;
+      const isDefault = minXFilter === -180 && maxXFilter === 180;
+      if (isMinAtPrev || isDefault) setMinXFilter(dataBounds.minLon);
+      if (isMaxAtPrev || isDefault) setMaxXFilter(dataBounds.maxLon);
     } else if (contourXAxis === 'latitude') {
-      setMinXFilter(dataBounds.minLat);
-      setMaxXFilter(dataBounds.maxLat);
-      setContourStartStation('');
-      setContourEndStation('');
+      const isMinAtPrev = minXFilter === prevXBoundsRef.current.minLat;
+      const isMaxAtPrev = maxXFilter === prevXBoundsRef.current.maxLat;
+      const isDefault = minXFilter === -180 && maxXFilter === 180;
+      if (isMinAtPrev || isDefault) setMinXFilter(dataBounds.minLat);
+      if (isMaxAtPrev || isDefault) setMaxXFilter(dataBounds.maxLat);
     } else {
-      setMinXFilter(0);
-      const count = sortedStationsList.length;
-      setMaxXFilter(count > 1 ? count - 1 : 1);
+      // For station index
+      const isMinAtPrev = minXFilter === 0;
+      const isMaxAtPrev = maxXFilter === (sortedStationsList.length - 2) || maxXFilter === (sortedStationsList.length - 1) || maxXFilter === 180;
+      if (isMinAtPrev || minXFilter === -180) setMinXFilter(0);
+      if (isMaxAtPrev || maxXFilter === 180) {
+        const count = sortedStationsList.length;
+        setMaxXFilter(count > 1 ? count - 1 : 1);
+      }
     }
+    prevXBoundsRef.current = { minLon: dataBounds.minLon, maxLon: dataBounds.maxLon, minLat: dataBounds.minLat, maxLat: dataBounds.maxLat };
   }, [contourXAxis, dataBounds.minLon, dataBounds.maxLon, dataBounds.minLat, dataBounds.maxLat, sortedStationsList.length]);
 
 
@@ -1590,22 +1825,40 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
         );
       })()}
 
-      {/* Sub-tab selection for 1D vs 2D */}
-      <div className="tab-group">
-        <div
-          className={`tab-btn ${visSubTab === 'profile1d' ? 'active' : ''}`}
-          onClick={() => setVisSubTab('profile1d')}
-        >
-          <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
-          <span>1D 单站深度剖面图</span>
+      {/* Variable Selector & Sub-tab Selection */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+        <div className="tab-group" style={{ margin: 0 }}>
+          <div
+            className={`tab-btn ${visSubTab === 'profile1d' ? 'active' : ''}`}
+            onClick={() => setVisSubTab('profile1d')}
+          >
+            <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+            <span>1D 单站深度剖面图</span>
+          </div>
+          <div
+            className={`tab-btn ${visSubTab === 'contour2d' ? 'active' : ''}`}
+            onClick={() => setVisSubTab('contour2d')}
+          >
+            <Map size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+            <span>2D 断面彩色等值线分布图</span>
+          </div>
         </div>
-        <div
-          className={`tab-btn ${visSubTab === 'contour2d' ? 'active' : ''}`}
-          onClick={() => setVisSubTab('contour2d')}
-        >
-          <Map size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
-          <span>2D 断面彩色等值线分布图</span>
-        </div>
+
+        {isHydroMode && (
+          <div className="card" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px', margin: 0, flexDirection: 'row' }}>
+            <span className="text-xs font-bold text-slate-700">当前绘制参数：</span>
+            <select
+              className="input-field py-1 px-3 text-sm font-bold text-sky-700 bg-sky-50/20"
+              style={{ width: '220px', margin: 0, border: '1px solid #cbd5e1', borderRadius: '6px' }}
+              value={selectedHydroParam}
+              onChange={(e) => setSelectedHydroParam(e.target.value)}
+            >
+              {allParameters.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Sub-tab: 1D Profile */}
@@ -2192,8 +2445,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                                 <XAxis
                                   type="number"
                                   dataKey="concentration"
-                                  name="浓度"
-                                  unit=" µmol/L"
+                                  name={isHydroMode ? selectedHydroParam : "浓度"}
+                                  unit={isHydroMode ? "" : " µmol/L"}
                                   stroke={chartStyles.axisStroke1D || '#475569'}
                                   fontSize={9}
                                   fontWeight="600"
@@ -2212,7 +2465,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                                   stroke={chartStyles.axisStroke1D || '#475569'}
                                   fontSize={9}
                                   fontWeight="600"
-                                  reversed={chartStyles.invertYAxis1D ?? true} tickMargin={subplotTickMargin}
+                                  reversed={chartStyles.invertYAxis1D ?? true}
+                                  tickMargin={subplotTickMargin}
                                   domain={sharedYDomain}
                                   axisLine={{ stroke: chartStyles.axisStroke1D }}
                                   tickLine={{ stroke: chartStyles.axisStroke1D }}
@@ -2228,8 +2482,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                                     padding: '6px'
                                   }}
                                   formatter={(value, name) => {
-                                    if (name === "浓度") return [`${value} µmol/L`, "DOC 浓度"];
-                                    if (name === "深度") return [`${value} m`, "测量深度"];
+                                    const displayVal = isHydroMode ? `${value}` : `${value} µmol/L`;
+                                    const displayName = isHydroMode ? selectedHydroParam : "DOC 浓度";
+                                    if (name === "浓度" || name === "concentration") return [displayVal, displayName];
+                                    if (name === "深度" || name === "depth") return [`${value} m`, "测量深度"];
                                     return [value, name];
                                   }}
                                 />
@@ -2286,8 +2542,8 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                       <XAxis
                         type="number"
                         dataKey="concentration"
-                        name="DOC 浓度"
-                        unit=" µmol/L"
+                        name={isHydroMode ? selectedHydroParam : "DOC 浓度"}
+                        unit={isHydroMode ? "" : " µmol/L"}
                         stroke={chartStyles.axisStroke1D || '#475569'}
                         fontSize={11}
                         fontWeight="600"
@@ -2321,8 +2577,10 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                           fontSize: '12px'
                         }}
                         formatter={(value, name) => {
-                          if (name === "DOC 浓度") return [`${value} µmol/L`, "DOC 浓度"];
-                          if (name === "深度") return [`${value} m`, "测量深度"];
+                          const displayVal = isHydroMode ? `${value}` : `${value} µmol/L`;
+                          const displayName = isHydroMode ? selectedHydroParam : "DOC 浓度";
+                          if (name === "DOC 浓度" || name === "concentration" || name === "浓度") return [displayVal, displayName];
+                          if (name === "深度" || name === "depth") return [`${value} m`, "测量深度"];
                           return [value, name];
                         }}
                       />
@@ -3689,9 +3947,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 {/* ================= INTERACTION GATES: INVISIBLE AXIS DRAG PANELS ================= */}
                 {/* Y-Axis Pan Rectangle (middle 80% range) */}
                 <rect
-                  x={10}
+                  x={20}
                   y={130}
-                  width={60}
+                  width={65}
                   height={300}
                   fill="transparent"
                   cursor="grab"
@@ -3702,9 +3960,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </rect>
                 {/* Y-Axis Scale Min Rectangle (top 10%) */}
                 <rect
-                  x={10}
+                  x={20}
                   y={90}
-                  width={60}
+                  width={65}
                   height={40}
                   fill="transparent"
                   cursor="ns-resize"
@@ -3715,9 +3973,9 @@ export default function OriginPlotter({ processedSamples, stationCoords }: Origi
                 </rect>
                 {/* Y-Axis Scale Max Rectangle (bottom 10%) */}
                 <rect
-                  x={10}
+                  x={20}
                   y={430}
-                  width={60}
+                  width={65}
                   height={40}
                   fill="transparent"
                   cursor="ns-resize"

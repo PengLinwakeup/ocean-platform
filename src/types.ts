@@ -53,3 +53,15 @@ export interface CalibrationCurve {
   intercept: number;
   rsq: number;
 }
+
+export interface HydrologicalSample {
+  id: string;
+  station: string;
+  longitude: number;
+  latitude: number;
+  depth: number;
+  pressure: number;
+  values: Record<string, number>;
+}
+
+
