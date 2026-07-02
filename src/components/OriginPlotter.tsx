@@ -13,6 +13,7 @@ import { curveCardinal } from 'd3-shape';
 import { normalizeStationName } from '../utils/stationParser';
 import { interpolateIDW } from '../utils/calc';
 import { ExcelSampleInfo, HydrologicalSample } from '../types';
+import { StationMap } from './StationMap';
 
 const loadSavedState = <T,>(key: string, defaultValue: T): T => {
   try {
@@ -741,6 +742,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     return Object.values(uniqueMap) as { station: string; longitude: number; latitude: number }[];
   }, [processedSamples, stationCoords]);
 
+
   // Derive stations list sorted naturally (e.g. S1, S2, S10)
   const sortedStationsList = useMemo(() => {
     const validSamples = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank);
@@ -785,6 +787,15 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const maxIdx = Math.max(startIdx, endIdx);
     return sortedStationsList.filter((_, idx) => idx >= minIdx && idx <= maxIdx);
   }, [sortedStationsList, contourStartStation, contourEndStation]);
+
+  // Active station coords based on selected range for map zooming
+  const mapStations = useMemo(() => {
+    if (visSubTab === 'contour2d') {
+      const activeNames = activeStations2D.map(normalizeStationName);
+      return uniqueStationCoords.filter(s => activeNames.includes(normalizeStationName(s.station)));
+    }
+    return uniqueStationCoords;
+  }, [visSubTab, activeStations2D, uniqueStationCoords]);
 
   const stationJitteredCoords2D = useMemo(() => {
     const validSamples = processedSamples.filter(
@@ -2670,7 +2681,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
           </div>
         </div>
 
-        <div className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', flex: 1, minWidth: '930px' }}>
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', margin: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3
                 className="card-title"
@@ -3281,7 +3293,21 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               <span>拖拽上方的图例框可以自由改变其位置，双击主标题、图例均可触发即时样式配置。</span>
             </div>
           </div>
+          <StationMap
+            stations={mapStations}
+            selectedStation={selectedStation}
+            selectedStationsMulti={selectedStationsMulti}
+            focusedStation1D={focusedStation1D}
+            stationMode1D={stationMode1D}
+            onSelectStation={setSelectedStation}
+            onToggleStationMulti={(st) => {
+              setSelectedStationsMulti(prev =>
+                prev.includes(st) ? prev.filter(x => x !== st) : [...prev, st]
+              );
+            }}
+          />
         </div>
+      </div>
       )}
 
       {/* Sub-tab: 2D Contour */}
@@ -4041,8 +4067,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
           </div>
 
           {/* ================= RIGHT SIDEBAR: HIGH-DEF LANDSCAPE CANVAS WINDOW ================= */}
-          <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '930px', overflowX: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', flex: 1, minWidth: '930px' }}>
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '930px', overflowX: 'auto', margin: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', width: '100%' }}>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <h3
                   style={{
@@ -4558,8 +4585,21 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               <span>※ 纵轴：海水标定深度 (米)</span>
               <span>● 黑色圆点：实际采样点</span>
               <span>■ 灰色阴影：海底地形 (海床)</span>
-              <span>💡 支持直接在坐标轴上拖拽平移范围，轴两端拖拽拉伸轴距</span>
             </div>
+          </div>
+          <StationMap
+              stations={mapStations}
+              selectedStation={selectedStation}
+              selectedStationsMulti={selectedStationsMulti}
+              focusedStation1D={focusedStation1D}
+              stationMode1D={stationMode1D}
+              onSelectStation={setSelectedStation}
+              onToggleStationMulti={(st) => {
+                setSelectedStationsMulti(prev =>
+                  prev.includes(st) ? prev.filter(x => x !== st) : [...prev, st]
+                );
+              }}
+            />
           </div>
         </div>
       )}

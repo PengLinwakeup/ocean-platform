@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Upload, FileText, Download, Trash2, CheckCircle, AlertTriangle,
-  Settings, ChevronLeft, ChevronRight, Check
+  Settings, ChevronLeft, ChevronRight, Check, Printer
 } from 'lucide-react';
 import { parseRawTxt } from './utils/parser';
 import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev } from './utils/calc';
@@ -871,6 +871,7 @@ export default function App() {
   }, [processedSamples]);
 
   const [qcSelectedStation, setQcSelectedStation] = useState<string>('all');
+  const [qcSelectedStatus, setQcSelectedStatus] = useState<'all' | 'qualified' | 'warning' | 'rejected'>('all');
 
   const qcStations = useMemo(() => {
     const list: string[] = [];
@@ -886,14 +887,37 @@ export default function App() {
   }, [processedSamples, stationsList]);
 
   const filteredQcSamples = useMemo(() => {
-    if (qcSelectedStation === 'all') return sortedProcessedSamples;
-    return sortedProcessedSamples.filter(s => {
-      if (qcSelectedStation === 'MQ/空白') return s.isBlank;
-      if (qcSelectedStation === 'STANDARD') return s.isStd;
-      if (s.isSeawater && s.sampleName.toUpperCase() === qcSelectedStation) return true;
-      return s.station === qcSelectedStation;
-    });
-  }, [sortedProcessedSamples, qcSelectedStation]);
+    let list = sortedProcessedSamples;
+
+    // 1. Filter by station
+    if (qcSelectedStation !== 'all') {
+      list = list.filter(s => {
+        if (qcSelectedStation === 'MQ/空白') return s.isBlank;
+        if (qcSelectedStation === 'STANDARD') return s.isStd;
+        if (s.isSeawater && s.sampleName.toUpperCase() === qcSelectedStation) return true;
+        return s.station === qcSelectedStation;
+      });
+    }
+
+    // 2. Filter by status
+    if (qcSelectedStatus !== 'all') {
+      list = list.filter(s => {
+        const isRsdHigh = s.rsd > 2.0;
+        if (qcSelectedStatus === 'qualified') {
+          return !s.isRejected && !isRsdHigh;
+        }
+        if (qcSelectedStatus === 'warning') {
+          return !s.isRejected && isRsdHigh;
+        }
+        if (qcSelectedStatus === 'rejected') {
+          return s.isRejected;
+        }
+        return true;
+      });
+    }
+
+    return list;
+  }, [sortedProcessedSamples, qcSelectedStation, qcSelectedStatus]);
 
   const itemsPerPage = 20;
   const paginatedQcSamples = useMemo(() => {
@@ -905,7 +929,7 @@ export default function App() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [qcSelectedStation]);
+  }, [qcSelectedStation, qcSelectedStatus]);
 
   // Note: dataBounds, uniqueStationCoords, and chart1dData memos moved to OriginPlotter component
 
@@ -1944,7 +1968,18 @@ export default function App() {
 
             <div className="card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
-                <h3 className="card-title" style={{ margin: 0 }}>样品浓度数据列表</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <h3 className="card-title" style={{ margin: 0 }}>样品浓度数据列表</h3>
+                  <button
+                    className="btn btn-secondary no-print"
+                    style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    onClick={() => window.print()}
+                    title="打开浏览器打印预览对话框"
+                  >
+                    <Printer size={14} />
+                    <span>打印报表 / 预览</span>
+                  </button>
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span className="text-sm font-semibold text-slate-500">站位筛选：</span>
@@ -1978,6 +2013,31 @@ export default function App() {
                           </option>
                         );
                       })}
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="text-sm font-semibold text-slate-500">状态筛选：</span>
+                    <select
+                      value={qcSelectedStatus}
+                      onChange={(e) => setQcSelectedStatus(e.target.value as any)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #cbd5e1',
+                        fontSize: '14px',
+                        color: '#334155',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        backgroundColor: '#fff',
+                        fontWeight: '500',
+                        boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+                      }}
+                    >
+                      <option value="all">全部状态</option>
+                      <option value="qualified">仅看合格</option>
+                      <option value="warning">仅看RSD超标</option>
+                      <option value="rejected">仅看已废弃</option>
                     </select>
                   </div>
 

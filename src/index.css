@@ -326,14 +326,17 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .tr-warning {
-  background-color: rgba(245, 158, 11, 0.05) !important;
+  background-color: var(--warning-light) !important;
 }
 .tr-warning:hover {
-  background-color: rgba(245, 158, 11, 0.08) !important;
+  background-color: #fde68a !important; /* slightly darker yellow on hover */
 }
 
 .tr-danger {
-  background-color: rgba(239, 68, 68, 0.05) !important;
+  background-color: var(--danger-light) !important;
+}
+.tr-danger:hover {
+  background-color: #fee2e2 !important; /* slightly darker red on hover */
 }
 
 .cell-excluded {
@@ -514,4 +517,51 @@ h1, h2, h3, h4, h5, h6 {
 }
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+@media print {
+  .wizard-header,
+  .wizard-footer,
+  .btn,
+  .no-print,
+  button,
+  select,
+  .card-title button,
+  .pagination,
+  .page-header {
+    display: none !important;
+  }
+  body, .wizard-container, .main-content {
+    background: white !important;
+    color: black !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .card {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin-bottom: 20px !important;
+  }
+  .custom-table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+  .custom-table th, .custom-table td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 8px !important;
+    font-size: 11px !important;
+    color: black !important;
+  }
+  .tr-warning {
+    background-color: #fef3c7 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .tr-danger {
+    background-color: #fef2f2 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    opacity: 0.6 !important;
+  }
 }
