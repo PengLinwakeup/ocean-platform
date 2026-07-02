@@ -87,6 +87,7 @@ export default function App() {
   const [sswMin, setSswMin] = useState<number>(() => loadSavedState('ocean_sswMin', 70));
   const [sswMax, setSswMax] = useState<number>(() => loadSavedState('ocean_sswMax', 80));
   const [curveOffsets, setCurveOffsets] = useState<Record<string, number>>(() => loadSavedState('ocean_curveOffsets', {}));
+  const [enableBlankCorrection, setEnableBlankCorrection] = useState<boolean>(() => loadSavedState('ocean_enableBlankCorrection', false));
 
   // Reset active page when filters change
   useEffect(() => {
@@ -122,12 +123,13 @@ export default function App() {
     localStorage.setItem('ocean_hydroParameters', JSON.stringify(hydroParameters));
     localStorage.setItem('ocean_hydroSheetNames', JSON.stringify(hydroSheetNames));
     localStorage.setItem('ocean_hydroSelectedSheet', JSON.stringify(hydroSelectedSheet));
+    localStorage.setItem('ocean_enableBlankCorrection', JSON.stringify(enableBlankCorrection));
   }, [
     currentStep, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
     excludedInjections, rejectedSamples, customSampleNames, sampleSortOrder, selectedCurveId,
     emptyInjectionThreshold, dswMin, dswMax, sswMin, sswMax, curveOffsets, disabledCurves, customStdUsedCs,
-    hydroSamples, hydroParameters, hydroSheetNames, hydroSelectedSheet
+    hydroSamples, hydroParameters, hydroSheetNames, hydroSelectedSheet, enableBlankCorrection
   ]);
 
 
@@ -606,6 +608,14 @@ export default function App() {
     });
   }, [rawInjections, excludedInjections, emptyInjectionThreshold, stationCoords, customSampleNames]);
 
+  // Calculate average area of MQ Blanks (specifically sampleId === 'Blank', excluding 'Cleaning')
+  const mqBlankAverageArea = useMemo(() => {
+    const blanks = sampleGroups.filter(g => g.isBlank && g.sampleId.toLowerCase() === 'blank');
+    if (blanks.length === 0) return 0;
+    const totalArea = blanks.reduce((sum, g) => sum + g.avArea, 0);
+    return totalArea / blanks.length;
+  }, [sampleGroups]);
+
   // Default station selection is now handled inside OriginPlotter component
 
   // Identify standard curve blocks and fit curves
@@ -669,8 +679,9 @@ export default function App() {
         const theoreticalC = matchedUsedC / currentDilution;
         const isEnabled = enabledStds[std.id] !== undefined ? enabledStds[std.id] : (stdIndex < dilutionFactors.length);
 
+        const areaToFit = std.avArea - (enableBlankCorrection ? mqBlankAverageArea : 0);
         if (isEnabled) {
-          activePoints.push({ x: theoreticalC, y: std.avArea });
+          activePoints.push({ x: theoreticalC, y: areaToFit });
         }
 
         return {
@@ -678,6 +689,7 @@ export default function App() {
           index: stdIndex,
           sampleName: std.sampleName,
           avArea: std.avArea,
+          correctedArea: areaToFit,
           dilution: currentDilution,
           theoreticalC,
           enabled: isEnabled,
@@ -699,7 +711,7 @@ export default function App() {
         rsq: fit.rsq
       };
     });
-  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs]);
+  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs, enableBlankCorrection, mqBlankAverageArea]);
 
   // Active/selected calibration curve
   const activeCurve = useMemo(() => {
@@ -760,7 +772,8 @@ export default function App() {
       const intercept = curve?.intercept || 0;
       const offset = curveOffsets[curveId] || 0;
 
-      const concentration = (g.avArea - intercept) / slope + offset;
+      const areaToUse = g.avArea - (enableBlankCorrection ? mqBlankAverageArea : 0);
+      const concentration = (areaToUse - intercept) / slope + offset;
       const error = g.sdArea / slope;
 
       // Match station coordinates
@@ -779,7 +792,7 @@ export default function App() {
         botDepth: coordMatch?.botDepth
       };
     });
-  }, [sampleGroups, calibrationCurves, sampleToCurveMap, rejectedSamples, stationCoords, curveOffsets]);
+  }, [sampleGroups, calibrationCurves, sampleToCurveMap, rejectedSamples, stationCoords, curveOffsets, enableBlankCorrection, mqBlankAverageArea]);
 
   // Sort processed samples for list rendering & export
   const sortedProcessedSamples = useMemo(() => {
@@ -960,6 +973,47 @@ export default function App() {
     });
     const wsRaw = xlsx.utils.aoa_to_sheet(rawInjectionsRows);
     xlsx.utils.book_append_sheet(wb, wsRaw, "Raw_Injections");
+
+    // 3. DOC Concentration Summary Sheet
+    const summarySamples = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank);
+    const sortedSummary = [...summarySamples].sort((a, b) => {
+      const getStationNumber = (st: string | null) => {
+        if (!st) return 0;
+        const match = st.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+      const numA = getStationNumber(a.station);
+      const numB = getStationNumber(b.station);
+      if (numA !== numB) {
+        return numB - numA; // Descending (e.g. ST-50 -> ST-1)
+      }
+      const depthA = a.depth !== null ? a.depth : 0;
+      const depthB = b.depth !== null ? b.depth : 0;
+      return depthB - depthA; // Descending (Deepest -> Shallowest)
+    });
+
+    const summaryRows: any[][] = [
+      ["DOC 浓度汇总表"],
+      ["排序规则", "大趋势：站位从大到小 (ST-50 ➔ ST-1) | 小趋势：同一个站位内深度从深到浅 (深层 ➔ 表层)"],
+      ["生成时间", new Date().toLocaleString()],
+      [],
+      ["样品名称", "站位", "深度 (m)", "使用工作曲线", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
+    ];
+
+    sortedSummary.forEach(s => {
+      summaryRows.push([
+        s.sampleName,
+        s.station,
+        s.depth !== null ? s.depth : "-",
+        s.curveName,
+        parseFloat(s.concentration.toFixed(2)),
+        parseFloat(s.error.toFixed(2)),
+        s.isRejected ? "已废弃" : s.rsd > 2 ? "RSD超标" : "合格"
+      ]);
+    });
+
+    const wsSummary = xlsx.utils.aoa_to_sheet(summaryRows);
+    xlsx.utils.book_append_sheet(wb, wsSummary, "DOC_Summary");
 
     // Download file
     const fileBase = files.length > 0 ? files[0].name.split('.')[0] : 'doc_data';
@@ -1420,34 +1474,82 @@ export default function App() {
             )}
 
             <div className="grid-1-2">
-              <div className="card" style={{ padding: '20px' }}>
-                <h3 className="card-title" style={{ fontSize: '16px' }}>拟合回归参数</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="card" style={{ padding: '20px' }}>
+                  <h3 className="card-title" style={{ fontSize: '16px' }}>拟合回归参数</h3>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '10px' }}>
-                  <div>
-                    <span className="text-xs text-slate-400 block font-semibold">拟合斜率 (Slope / m)</span>
-                    <span className="text-3xl font-bold text-sky-600 font-display">
-                      {calibrationCurve.slope ? calibrationCurve.slope.toFixed(6) : "N/A"}
-                    </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '10px' }}>
+                    <div>
+                      <span className="text-xs text-slate-400 block font-semibold">拟合斜率 (Slope / m)</span>
+                      <span className="text-3xl font-bold text-sky-600 font-display">
+                        {calibrationCurve.slope ? calibrationCurve.slope.toFixed(6) : "N/A"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400 block font-semibold">拟合截距 (Intercept / b)</span>
+                      <span className="text-xl font-bold text-slate-700">
+                        {calibrationCurve.intercept ? calibrationCurve.intercept.toFixed(6) : "N/A"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400 block font-semibold">判定系数 (R-squared / R²)</span>
+                      <span className="text-xl font-bold text-slate-700 flex items-center gap-2">
+                        <span>{calibrationCurve.rsq ? calibrationCurve.rsq.toFixed(6) : "N/A"}</span>
+                        {calibrationCurve.rsq >= 0.999 ? (
+                          <span className="badge badge-success text-[10px]">优秀</span>
+                        ) : calibrationCurve.rsq >= 0.99 ? (
+                          <span className="badge badge-warning text-[10px]">合格</span>
+                        ) : calibrationCurve.rsq > 0 ? (
+                          <span className="badge badge-danger text-[10px]">差</span>
+                        ) : null}
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-xs text-slate-400 block font-semibold">拟合截距 (Intercept / b)</span>
-                    <span className="text-xl font-bold text-slate-700">
-                      {calibrationCurve.intercept ? calibrationCurve.intercept.toFixed(6) : "N/A"}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-xs text-slate-400 block font-semibold">判定系数 (R-squared / R²)</span>
-                    <span className="text-xl font-bold text-slate-700 flex items-center gap-2">
-                      <span>{calibrationCurve.rsq ? calibrationCurve.rsq.toFixed(6) : "N/A"}</span>
-                      {calibrationCurve.rsq >= 0.999 ? (
-                        <span className="badge badge-success text-[10px]">优秀</span>
-                      ) : calibrationCurve.rsq >= 0.99 ? (
-                        <span className="badge badge-warning text-[10px]">合格</span>
-                      ) : calibrationCurve.rsq > 0 ? (
-                        <span className="badge badge-danger text-[10px]">差</span>
-                      ) : null}
-                    </span>
+                </div>
+
+                <div className="card" style={{ padding: '20px' }}>
+                  <h3 className="card-title" style={{ fontSize: '15px' }}>系统空白扣除 (MQ)</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                      <input
+                        type="checkbox"
+                        checked={enableBlankCorrection}
+                        onChange={e => setEnableBlankCorrection(e.target.checked)}
+                      />
+                      <span>启用 MQ 空白扣除</span>
+                    </label>
+
+                    <div style={{ fontSize: '11px', color: '#64748b', borderTop: '1px solid #e2e8f0', paddingTop: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span>检测到 MQ (Blank):</span>
+                        <span className="font-bold text-slate-700">
+                          {sampleGroups.filter(g => g.isBlank && g.sampleId.toLowerCase() === 'blank').length} 个
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span>系统空白平均面积:</span>
+                        <span className="font-bold text-sky-600 font-mono">
+                          {mqBlankAverageArea.toFixed(5)}
+                        </span>
+                      </div>
+
+                      {sampleGroups.filter(g => g.isBlank).length > 0 && (
+                        <div style={{ backgroundColor: '#f8fafc', padding: '6px', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+                          <span style={{ fontWeight: '600', display: 'block', marginBottom: '4px', fontSize: '10px' }}>MQ 详细信息列表：</span>
+                          <div style={{ maxHeight: '100px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            {sampleGroups.filter(g => g.isBlank).map(g => {
+                              const isCleaning = g.sampleId.toLowerCase() === 'cleaning';
+                              return (
+                                <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', opacity: isCleaning ? 0.5 : 1 }}>
+                                  <span>{g.sampleName} ({g.sampleId}):</span>
+                                  <span className="font-mono">{g.avArea.toFixed(4)} {isCleaning && '(已忽略)'}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

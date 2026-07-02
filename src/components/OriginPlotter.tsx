@@ -191,6 +191,11 @@ interface ChartStyles {
   yAxisTitleOffset?: number;
   xAxisTitleOffset?: number;
   colorbarTitleOffset?: number;
+  showPoints2D?: boolean;
+  pointRadius2D?: number;
+  pointFill2D?: string;
+  pointStroke2D?: string;
+  pointStrokeWidth2D?: number;
 }
 
 interface TextSetting {
@@ -619,7 +624,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       axisStroke1D: '#475569', // Professional slate grey axes
       yAxisTitleOffset: 0,
       xAxisTitleOffset: 0,
-      colorbarTitleOffset: 0
+      colorbarTitleOffset: 0,
+      showPoints2D: true,
+      pointRadius2D: 4,
+      pointFill2D: '#000000',
+      pointStroke2D: '#ffffff',
+      pointStrokeWidth2D: 0.75
     };
   });
 
@@ -3836,6 +3846,93 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                        </select>
                      </div>
 
+                      <div className="input-group" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
+                          <input type="checkbox" checked={chartStyles.showTopStationLabels} onChange={e => setChartStyles(prev => ({ ...prev, showTopStationLabels: e.target.checked }))} />
+                          <span>显示顶部测站标签 (Show Top Station Labels)</span>
+                        </label>
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
+                          <input type="checkbox" checked={chartStyles.closedBorderTicks} onChange={e => setChartStyles(prev => ({ ...prev, closedBorderTicks: e.target.checked }))} />
+                          <span>开启四周对称封闭轴框 (Closed Box Ticks)</span>
+                        </label>
+                      </div>
+
+                      {/* 2D Sampling Points customization */}
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>实际采样点样式设置</label>
+                        
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
+                          <input 
+                            type="checkbox" 
+                            checked={chartStyles.showPoints2D ?? true} 
+                            onChange={e => setChartStyles(prev => ({ ...prev, showPoints2D: e.target.checked }))} 
+                          />
+                          <span>显示实际采样点</span>
+                        </label>
+
+                        {(chartStyles.showPoints2D ?? true) && (
+                          <>
+                            <div className="grid-2" style={{ gap: '8px' }}>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                                  <span>采样点半径: {chartStyles.pointRadius2D ?? chartStyles.pointRadius ?? 4}px</span>
+                                </div>
+                                <input 
+                                  type="range" 
+                                  min="0" 
+                                  max="8" 
+                                  step="0.5" 
+                                  className="w-full" 
+                                  value={chartStyles.pointRadius2D ?? chartStyles.pointRadius ?? 4} 
+                                  onChange={e => setChartStyles(prev => ({ ...prev, pointRadius2D: parseFloat(e.target.value) }))} 
+                                />
+                              </div>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                                  <span>描边粗细: {chartStyles.pointStrokeWidth2D ?? chartStyles.pointStrokeWidth ?? 0.75}px</span>
+                                </div>
+                                <input 
+                                  type="range" 
+                                  min="0" 
+                                  max="3" 
+                                  step="0.25" 
+                                  className="w-full" 
+                                  value={chartStyles.pointStrokeWidth2D ?? chartStyles.pointStrokeWidth ?? 0.75} 
+                                  onChange={e => setChartStyles(prev => ({ ...prev, pointStrokeWidth2D: parseFloat(e.target.value) }))} 
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid-2" style={{ gap: '8px', marginTop: '4px' }}>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label" style={{ fontSize: '10px' }}>填充颜色</label>
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                  <input 
+                                    type="color" 
+                                    style={{ width: '40px', height: '24px', cursor: 'pointer', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px' }} 
+                                    value={chartStyles.pointFill2D ?? chartStyles.pointFill ?? '#000000'} 
+                                    onChange={e => setChartStyles(prev => ({ ...prev, pointFill2D: e.target.value }))} 
+                                  />
+                                  <span style={{ fontSize: '11px', color: '#475569', fontFamily: 'monospace' }}>{chartStyles.pointFill2D ?? chartStyles.pointFill ?? '#000000'}</span>
+                                </div>
+                              </div>
+                              <div className="input-group" style={{ marginBottom: 0 }}>
+                                <label className="input-label" style={{ fontSize: '10px' }}>描边颜色</label>
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                  <input 
+                                    type="color" 
+                                    style={{ width: '40px', height: '24px', cursor: 'pointer', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px' }} 
+                                    value={chartStyles.pointStroke2D ?? chartStyles.pointStroke ?? '#ffffff'} 
+                                    onChange={e => setChartStyles(prev => ({ ...prev, pointStroke2D: e.target.value }))} 
+                                  />
+                                  <span style={{ fontSize: '11px', color: '#475569', fontFamily: 'monospace' }}>{chartStyles.pointStroke2D ?? chartStyles.pointStroke ?? '#ffffff'}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
                      {/* Tick Marks Direction & Stagger Controls */}
                      <div className="grid-2" style={{ gap: '8px' }}>
                        <div className="input-group">
@@ -4081,15 +4178,15 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   )}
 
                   {/* Black dots overlay representing measurement depth/locations */}
-                  {contourDataPoints.map((pt, i) => (
+                  {(chartStyles.showPoints2D ?? true) && contourDataPoints.map((pt, i) => (
                     <circle
                       key={i}
                       cx={pt.cx + 80}
                       cy={pt.cy + 90}
-                      r={chartStyles.pointRadius}
-                      fill={chartStyles.pointFill}
-                      stroke={chartStyles.pointStroke}
-                      strokeWidth={chartStyles.pointStrokeWidth}
+                      r={chartStyles.pointRadius2D ?? chartStyles.pointRadius ?? 4}
+                      fill={chartStyles.pointFill2D ?? chartStyles.pointFill ?? '#000000'}
+                      stroke={chartStyles.pointStroke2D ?? chartStyles.pointStroke ?? '#ffffff'}
+                      strokeWidth={chartStyles.pointStrokeWidth2D ?? chartStyles.pointStrokeWidth ?? 0.75}
                     >
                       <title>浓度: {pt.conc.toFixed(2)} µmol/L</title>
                     </circle>
