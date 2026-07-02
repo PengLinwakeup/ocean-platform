@@ -96,7 +96,10 @@ export function selectBestSubset(injections: number[]): {
  * Fits a linear regression curve: Y = Slope * X + Intercept
  * Y represents the peak area, X represents the theoretical concentration.
  */
-export function fitCalibrationCurve(points: { x: number; y: number }[]): {
+export function fitCalibrationCurve(
+  points: { x: number; y: number }[],
+  forceZeroIntercept?: boolean
+): {
   slope: number;
   intercept: number;
   rsq: number;
@@ -108,6 +111,35 @@ export function fitCalibrationCurve(points: { x: number; y: number }[]): {
 
   const xs = points.map(p => p.x);
   const ys = points.map(p => p.y);
+
+  if (forceZeroIntercept) {
+    let sumXY = 0;
+    let sumXX = 0;
+    let sumYY = 0;
+    let meanY = 0;
+    for (let i = 0; i < n; i++) {
+      sumXY += xs[i] * ys[i];
+      sumXX += xs[i] * xs[i];
+      sumYY += ys[i] * ys[i];
+      meanY += ys[i];
+    }
+    meanY /= n;
+
+    const slope = sumXX === 0 ? 0 : sumXY / sumXX;
+    const intercept = 0;
+
+    // R-squared for regression through origin: 1 - SSE / SST
+    let sse = 0;
+    let sst = 0;
+    for (let i = 0; i < n; i++) {
+      const predY = slope * xs[i];
+      sse += Math.pow(ys[i] - predY, 2);
+      sst += Math.pow(ys[i] - meanY, 2);
+    }
+    const rsq = sst === 0 ? 0 : Math.max(0, 1 - sse / sst);
+
+    return { slope, intercept, rsq };
+  }
   
   const meanX = calculateMean(xs);
   const meanY = calculateMean(ys);

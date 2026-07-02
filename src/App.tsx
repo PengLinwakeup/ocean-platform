@@ -44,7 +44,7 @@ export default function App() {
   const [stdStockC, setStdStockC] = useState<number>(() => loadSavedState('ocean_stdStockC', 10000)); // standard stock concentration (µmol C / L)
   const [stdDilutionFactor, setStdDilutionFactor] = useState<number>(() => loadSavedState('ocean_stdDilutionFactor', 25.2525)); // standard dilution factor
   const [stdUsedC, setStdUsedC] = useState<number>(() => loadSavedState('ocean_stdUsedC', 396)); // used standard uM C
-  const [dilutionFactors, setDilutionFactors] = useState<number[]>(() => loadSavedState('ocean_dilutionFactors', [21, 10, 6, 5, 4, 3]));
+  const [dilutionFactors] = useState<number[]>(() => loadSavedState('ocean_dilutionFactors', [21, 10, 6, 5, 4, 3]));
 
   const handleStdStockCChange = (val: number) => {
     setStdStockC(val);
@@ -88,6 +88,7 @@ export default function App() {
   const [sswMax, setSswMax] = useState<number>(() => loadSavedState('ocean_sswMax', 80));
   const [curveOffsets, setCurveOffsets] = useState<Record<string, number>>(() => loadSavedState('ocean_curveOffsets', {}));
   const [enableBlankCorrection, setEnableBlankCorrection] = useState<boolean>(() => loadSavedState('ocean_enableBlankCorrection', false));
+  const [forceZeroIntercept, setForceZeroIntercept] = useState<boolean>(() => loadSavedState('ocean_forceZeroIntercept', false));
 
   // Reset active page when filters change
   useEffect(() => {
@@ -124,12 +125,13 @@ export default function App() {
     localStorage.setItem('ocean_hydroSheetNames', JSON.stringify(hydroSheetNames));
     localStorage.setItem('ocean_hydroSelectedSheet', JSON.stringify(hydroSelectedSheet));
     localStorage.setItem('ocean_enableBlankCorrection', JSON.stringify(enableBlankCorrection));
+    localStorage.setItem('ocean_forceZeroIntercept', JSON.stringify(forceZeroIntercept));
   }, [
     currentStep, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
     excludedInjections, rejectedSamples, customSampleNames, sampleSortOrder, selectedCurveId,
     emptyInjectionThreshold, dswMin, dswMax, sswMin, sswMax, curveOffsets, disabledCurves, customStdUsedCs,
-    hydroSamples, hydroParameters, hydroSheetNames, hydroSelectedSheet, enableBlankCorrection
+    hydroSamples, hydroParameters, hydroSheetNames, hydroSelectedSheet, enableBlankCorrection, forceZeroIntercept
   ]);
 
 
@@ -381,6 +383,7 @@ export default function App() {
     setHydroSheetNames([]);
     setHydroSelectedSheet('');
     setHydroFileBuffer(null);
+    setForceZeroIntercept(false);
 
     // Clean up localStorage to prevent lingering data
     const keys = [
@@ -394,7 +397,8 @@ export default function App() {
       'ocean_maxDepthFilter', 'ocean_minXFilter', 'ocean_maxXFilter', 'ocean_showBackgroundMap',
       'ocean_chart_styles', 'ocean_visSettingsTab',
       'ocean_dswMin', 'ocean_dswMax', 'ocean_sswMin', 'ocean_sswMax', 'ocean_curveOffsets', 'ocean_disabledCurves', 'ocean_customStdUsedCs',
-      'ocean_hydroSamples', 'ocean_hydroParameters', 'ocean_hydroSheetNames', 'ocean_hydroSelectedSheet'
+      'ocean_hydroSamples', 'ocean_hydroParameters', 'ocean_hydroSheetNames', 'ocean_hydroSelectedSheet',
+      'ocean_enableBlankCorrection', 'ocean_forceZeroIntercept'
     ];
     keys.forEach(k => localStorage.removeItem(k));
   };
@@ -698,7 +702,7 @@ export default function App() {
         };
       });
 
-      const fit = fitCalibrationCurve(activePoints);
+      const fit = fitCalibrationCurve(activePoints, forceZeroIntercept);
 
       return {
         id: curveId,
@@ -711,7 +715,7 @@ export default function App() {
         rsq: fit.rsq
       };
     });
-  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs, enableBlankCorrection, mqBlankAverageArea]);
+  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs, enableBlankCorrection, mqBlankAverageArea, forceZeroIntercept]);
 
   // Active/selected calibration curve
   const activeCurve = useMemo(() => {
@@ -1519,6 +1523,15 @@ export default function App() {
                       <span>启用 MQ 空白扣除</span>
                     </label>
 
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                      <input
+                        type="checkbox"
+                        checked={forceZeroIntercept}
+                        onChange={e => setForceZeroIntercept(e.target.checked)}
+                      />
+                      <span>强制工作曲线过原点 (截距为 0)</span>
+                    </label>
+
                     <div style={{ fontSize: '11px', color: '#64748b', borderTop: '1px solid #e2e8f0', paddingTop: '10px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                         <span>检测到 MQ (Blank):</span>
@@ -1714,11 +1727,6 @@ export default function App() {
                             onChange={e => {
                               const val = parseFloat(e.target.value);
                               if (!isNaN(val) && val > 0) {
-                                if (std.index !== undefined && std.index < dilutionFactors.length) {
-                                  const newFactors = [...dilutionFactors];
-                                  newFactors[std.index] = val;
-                                  setDilutionFactors(newFactors);
-                                }
                                 setCustomDilutions(prev => ({
                                   ...prev,
                                   [std.id]: val
