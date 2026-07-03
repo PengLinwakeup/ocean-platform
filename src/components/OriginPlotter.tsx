@@ -101,6 +101,46 @@ const formatLongitude = (lon: number): string => {
   return `${lon.toFixed(1)}°E`;
 };
 
+const formatStationLabel = (station: string | null | undefined): string => {
+  if (!station) return '';
+  const trimmed = station.trim();
+  
+  // If it's a pure number (e.g., "50"), return "ST-50"
+  if (/^\d+$/.test(trimmed)) {
+    return `ST-${trimmed}`;
+  }
+  
+  // If it matches st/ST followed by a number (optionally with separator), like "st50" or "ST-50" or "ST_50"
+  const match = trimmed.match(/^st[-_]?(\d+)$/i);
+  if (match) {
+    return `ST-${match[1]}`;
+  }
+  
+  // If it is something else starting with st/ST (like ST-46-200), normalize prefix to ST-
+  if (trimmed.toLowerCase().startsWith('st')) {
+    const rest = trimmed.slice(2).replace(/^[-_]+/, '');
+    return `ST-${rest}`;
+  }
+  
+  return trimmed;
+};
+
+const formatParamDisplayName = (param: string): string => {
+  if (!param) return '';
+  // Check if it's temperature
+  if (param.toLowerCase().includes('temperature')) {
+    return 'Temperature [°C]';
+  }
+  // Check if it's salinity
+  if (param.toLowerCase().includes('salinity')) {
+    return 'Salinity [psu]';
+  }
+  // Remove (ITS-90) or (PSS-78) or similar from other parameters if any
+  return param
+    .replace(/\s*\(ITS-90\)/gi, '')
+    .replace(/\s*\(PSS-78\)/gi, '');
+};
+
 const renderCustomPointShape = (cx: number, cy: number, size: number, fill: string, stroke: string, strokeWidth: number, shapeType: string) => {
   if (shapeType === 'square') {
     return (
@@ -1131,19 +1171,20 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       }
 
       // Update text settings
+      const displayName = formatParamDisplayName(selectedHydroParam);
       setTextSettings(prev => ({
         ...prev,
         title: {
           ...prev.title,
-          text: `${selectedHydroParam} 空间断面等值线分布图`
+          text: `${displayName} 空间断面等值线分布图`
         },
         legendLabel: {
           ...prev.legendLabel,
-          text: `${selectedHydroParam} 测量值`
+          text: `${displayName} 测量值`
         },
         colorbarTitle: {
           ...prev.colorbarTitle,
-          text: `${selectedHydroParam}`
+          text: displayName
         }
       }));
 
@@ -1845,7 +1886,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         labelsList.push({
           x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
           y: 0,
-          name: activeStations2D[i]!
+          name: formatStationLabel(activeStations2D[i]!)
         });
       }
     } else {
@@ -1870,7 +1911,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const ticks = activeStations2D.map(st => {
       const xVal = stationJitteredCoords2D[st] || 0;
       const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
-      return { name: st || '', cx };
+      return { name: formatStationLabel(st) || '', cx };
     });
 
     return {
@@ -2037,7 +2078,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         labelsList.push({
           x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
           y: 0,
-          name: activeStations2D[i]!
+          name: formatStationLabel(activeStations2D[i]!)
         });
       }
     } else {
@@ -2062,7 +2103,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const ticks = activeStations2D.map(st => {
       const xVal = stationJitteredCoords2D[st] || 0;
       const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
-      return { name: st || '', cx };
+      return { name: formatStationLabel(st) || '', cx };
     });
 
     return {
