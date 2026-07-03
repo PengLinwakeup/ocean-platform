@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Map as MapIcon, Upload, Trash2, Compass } from 'lucide-react';
+import { Map as MapIcon, Upload, Trash2, Compass, Download } from 'lucide-react';
 
 export interface StationGeoInfo {
   station: string;
@@ -33,6 +33,7 @@ export function StationMap({
   const mapRef = useRef<L.Map | null>(null);
   const markerGroupRef = useRef<L.FeatureGroup | null>(null);
   const pathLineRef = useRef<L.Polyline | null>(null);
+
 
   // Offline Image State
   const [bgImage, setBgImage] = useState<string | null>(() => {
@@ -93,6 +94,191 @@ export function StationMap({
       ...prev,
       [stationToPlace]: { x, y },
     }));
+  };
+
+  const handleDownloadMap = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200;
+    canvas.height = 800;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const padding = 80;
+    const mapW = canvas.width - padding * 2;
+    const mapH = canvas.height - padding * 2;
+
+    if (activeTab === 'offline' && bgImage) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const imgRatio = img.width / img.height;
+        const canvasRatio = mapW / mapH;
+        let drawW = mapW;
+        let drawH = mapH;
+        let startX = padding;
+        let startY = padding;
+        if (imgRatio > canvasRatio) {
+          drawH = mapW / imgRatio;
+          startY = padding + (mapH - drawH) / 2;
+        } else {
+          drawW = mapH * imgRatio;
+          startX = padding + (mapW - drawW) / 2;
+        }
+        ctx.drawImage(img, startX, startY, drawW, drawH);
+
+        stations.forEach(s => {
+          const coord = offlineCoords[s.station];
+          if (!coord) return;
+          const cx = startX + (coord.x / 100) * drawW;
+          const cy = startY + (coord.y / 100) * drawH;
+
+          const isSelected = stationMode1D === 'single'
+            ? selectedStation === s.station
+            : selectedStationsMulti.includes(s.station);
+          const isFocused = focusedStation1D === s.station;
+
+          const color = isFocused ? '#dc2626' : isSelected ? (stationMode1D === 'single' ? '#ef4444' : '#16a34a') : '#2563eb';
+          const radius = isFocused ? 12 : isSelected ? 9 : 6;
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 11px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(s.station, cx, cy + radius + 4);
+        });
+
+        triggerDownload();
+      };
+      img.src = bgImage;
+    } else {
+      const validStations = stations.filter(s => !isNaN(s.latitude) && !isNaN(s.longitude));
+      if (validStations.length === 0) return;
+
+      const lats = validStations.map(s => s.latitude);
+      const lons = validStations.map(s => s.longitude);
+      const minLat = Math.min(...lats);
+      const maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons);
+      const maxLon = Math.max(...lons);
+
+      const latSpan = maxLat - minLat || 1.0;
+      const lonSpan = maxLon - minLon || 1.0;
+
+      const latMargin = latSpan * 0.15;
+      const lonMargin = lonSpan * 0.15;
+
+      const plotMinLat = minLat - latMargin;
+      const plotMaxLat = maxLat + latMargin;
+      const plotMinLon = minLon - lonMargin;
+      const plotMaxLon = maxLon + lonMargin;
+
+      const plotLatSpan = plotMaxLat - plotMinLat;
+      const plotLonSpan = plotMaxLon - plotMinLon;
+
+      const getCanvasCoords = (lon: number, lat: number) => {
+        const cx = padding + ((lon - plotMinLon) / plotLonSpan) * mapW;
+        const cy = padding + (1 - (lat - plotMinLat) / plotLatSpan) * mapH;
+        return { cx, cy };
+      };
+
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+
+      for (let i = 0; i <= 5; i++) {
+        const gridLon = plotMinLon + (plotLonSpan * i) / 5;
+        const gridLat = plotMinLat + (plotLatSpan * i) / 5;
+
+        const pLonStart = getCanvasCoords(gridLon, plotMinLat);
+        const pLonEnd = getCanvasCoords(gridLon, plotMaxLat);
+        ctx.beginPath();
+        ctx.moveTo(pLonStart.cx, pLonStart.cy);
+        ctx.lineTo(pLonEnd.cx, pLonEnd.cy);
+        ctx.stroke();
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${gridLon.toFixed(2)}°`, pLonStart.cx, pLonStart.cy + 18);
+
+        const pLatStart = getCanvasCoords(plotMinLon, gridLat);
+        const pLatEnd = getCanvasCoords(plotMaxLon, gridLat);
+        ctx.beginPath();
+        ctx.moveTo(pLatStart.cx, pLatStart.cy);
+        ctx.lineTo(pLatEnd.cx, pLatEnd.cy);
+        ctx.stroke();
+
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${gridLat.toFixed(2)}°`, pLatStart.cx - 10, pLatStart.cy);
+      }
+
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      validStations.forEach((s, idx) => {
+        const { cx, cy } = getCanvasCoords(s.longitude, s.latitude);
+        if (idx === 0) ctx.moveTo(cx, cy);
+        else ctx.lineTo(cx, cy);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      validStations.forEach(s => {
+        const { cx, cy } = getCanvasCoords(s.longitude, s.latitude);
+
+        const isSelected = stationMode1D === 'single'
+          ? selectedStation === s.station
+          : selectedStationsMulti.includes(s.station);
+        const isFocused = focusedStation1D === s.station;
+
+        const color = isFocused ? '#dc2626' : isSelected ? (stationMode1D === 'single' ? '#ef4444' : '#16a34a') : '#2563eb';
+        const radius = isFocused ? 12 : isSelected ? 9 : 6;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        ctx.fillStyle = '#1e293b';
+        ctx.font = 'bold 13px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(s.station, cx, cy + radius + 5);
+      });
+
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(padding, padding, mapW, mapH);
+
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 18px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Cruise Stations Map (站位空间位置图)', padding, padding - 30);
+
+      triggerDownload();
+    }
+
+    function triggerDownload() {
+      const link = document.createElement('a');
+      link.download = `station_map_${new Date().toLocaleDateString()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
   };
 
   // Initialize Leaflet Map
@@ -241,9 +427,20 @@ export function StationMap({
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Compass size={18} style={{ color: 'var(--primary)' }} />
-          <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>站位地理空间对应图</h4>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Compass size={18} style={{ color: 'var(--primary)' }} />
+            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>站位地理空间对应图</h4>
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', height: '26px' }}
+            onClick={handleDownloadMap}
+            title="将当前站位图导出为高分辨率 PNG 图像"
+          >
+            <Download size={12} />
+            <span>导出图片</span>
+          </button>
         </div>
         
         {/* Mode Switch Tabs */}

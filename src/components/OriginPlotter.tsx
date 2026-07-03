@@ -87,6 +87,20 @@ const MULTI_SHAPES: ('circle' | 'square' | 'triangle' | 'diamond')[] = [
   'diamond',
 ];
 
+const formatLatitude = (lat: number): string => {
+  if (lat < 0) {
+    return `${Math.abs(lat).toFixed(1)}°S`;
+  }
+  return `${lat.toFixed(1)}°N`;
+};
+
+const formatLongitude = (lon: number): string => {
+  if (lon < 0) {
+    return `${Math.abs(lon).toFixed(1)}°W`;
+  }
+  return `${lon.toFixed(1)}°E`;
+};
+
 const renderCustomPointShape = (cx: number, cy: number, size: number, fill: string, stroke: string, strokeWidth: number, shapeType: string) => {
   if (shapeType === 'square') {
     return (
@@ -167,6 +181,7 @@ interface ChartStyles {
   colorBanding: 'continuous' | 'discrete';
   maskDistance: number; // 0.1 to 1.0 (mask threshold percentage, 1.0 means no mask)
   showTopStationLabels: boolean;
+  respectBathyBarriers?: boolean; // Topography barrier support for 2D gridding
   
   // 1D profile academic additions
   symbolShape: 'circle' | 'square' | 'triangle' | 'diamond';
@@ -192,6 +207,7 @@ interface ChartStyles {
   yAxisTitleOffset?: number;
   xAxisTitleOffset?: number;
   colorbarTitleOffset?: number;
+  colorbarTitleXOffset?: number;
   showPoints2D?: boolean;
   pointRadius2D?: number;
   pointFill2D?: string;
@@ -378,10 +394,22 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   const [stationSortMode1D, setStationSortMode1D] = useState<'name' | 'latitude' | 'longitude'>(() => loadSavedState<'name' | 'latitude' | 'longitude'>('ocean_stationSortMode1D', 'name'));
   const [contourStartStation, setContourStartStation] = useState<string>(() => loadSavedState('ocean_contourStartStation', ''));
   const [contourEndStation, setContourEndStation] = useState<string>(() => loadSavedState('ocean_contourEndStation', ''));
+  const [showUnfilteredComparison, setShowUnfilteredComparison] = useState<boolean>(() => loadSavedState('ocean_showUnfilteredComparison', false));
+  const [invertXAxis2D, setInvertXAxis2D] = useState<boolean>(() => loadSavedState('ocean_invertXAxis2D', false));
+  const [depthTickStep, setDepthTickStep] = useState<number>(() => loadSavedState('ocean_depthTickStep', 100));
+  const [showContourLabels, setShowContourLabels] = useState<boolean>(() => loadSavedState('ocean_showContourLabels', true));
+  const [contourLabelMode, setContourLabelMode] = useState<'all' | 'multiplesOf10' | 'every2nd'>(() => loadSavedState<'all' | 'multiplesOf10' | 'every2nd'>('ocean_contourLabelMode', 'multiplesOf10'));
   const [highResBathyPoints, setHighResBathyPoints] = useState<{ xVal: number; depth: number }[]>([]);
   const [loadingBathy, setLoadingBathy] = useState<boolean>(false);
   const [localTiffFile, setLocalTiffFile] = useState<File | null>(null);
   const [bathySource, setBathySource] = useState<'api' | 'tiff' | 'fallback'>('api');
+  const [hoveredPoint2D, setHoveredPoint2D] = useState<{
+    station: string;
+    depth: number;
+    concentration: number;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Custom templates/presets state for preserving work steps
   const [customPresets, setCustomPresets] = useState<{
@@ -602,6 +630,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       colorBanding: 'continuous',
       maskDistance: 0.35,
       showTopStationLabels: true,
+      respectBathyBarriers: true,
       
       // 1D defaults
       symbolShape: 'circle',
@@ -626,6 +655,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       yAxisTitleOffset: 0,
       xAxisTitleOffset: 0,
       colorbarTitleOffset: 0,
+      colorbarTitleXOffset: 0,
       showPoints2D: true,
       pointRadius2D: 4,
       pointFill2D: '#000000',
@@ -695,30 +725,16 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     localStorage.setItem('ocean_legendPos', JSON.stringify(legendPos));
     localStorage.setItem('ocean_contourStartStation', JSON.stringify(contourStartStation));
     localStorage.setItem('ocean_contourEndStation', JSON.stringify(contourEndStation));
+    localStorage.setItem('ocean_showUnfilteredComparison', JSON.stringify(showUnfilteredComparison));
+    localStorage.setItem('ocean_invertXAxis2D', JSON.stringify(invertXAxis2D));
+    localStorage.setItem('ocean_depthTickStep', JSON.stringify(depthTickStep));
+    localStorage.setItem('ocean_showContourLabels', JSON.stringify(showContourLabels));
+    localStorage.setItem('ocean_contourLabelMode', JSON.stringify(contourLabelMode));
   }, [
     visSubTab, selectedStation, stationMode1D, selectedStationsMulti, focusedStation1D, multiLayout1D, docMin, docMax, contourStep, idwPower, anisotropyFactor,
     contourXAxis, minDepthFilter, maxDepthFilter, minXFilter, maxXFilter, visSettingsTab, settingsTab1D, stationSortMode1D, chartStyles, textSettings, legendPos,
-    contourStartStation, contourEndStation
+    contourStartStation, contourEndStation, showUnfilteredComparison, invertXAxis2D, depthTickStep, showContourLabels, contourLabelMode
   ]);
-
-  // Automatically toggle top labels based on X-Axis type to avoid duplicate redundancy by default
-  useEffect(() => {
-    setChartStyles(prev => ({
-      ...prev,
-      showTopStationLabels: contourXAxis !== 'station'
-    }));
-    setTextSettings(prev => ({
-      ...prev,
-      xAxisLabel: {
-        ...prev.xAxisLabel,
-        text: contourXAxis === 'longitude'
-          ? 'Longitude (°E)'
-          : contourXAxis === 'latitude'
-            ? 'Latitude (°N)'
-            : 'Station Index'
-      }
-    }));
-  }, [contourXAxis]);
 
   // Unique coordinate mapping for station scatter maps
   const uniqueStationCoords = useMemo(() => {
@@ -741,7 +757,6 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     });
     return Object.values(uniqueMap) as { station: string; longitude: number; latitude: number }[];
   }, [processedSamples, stationCoords]);
-
 
   // Derive stations list sorted naturally (e.g. S1, S2, S10)
   const sortedStationsList = useMemo(() => {
@@ -796,6 +811,33 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     }
     return uniqueStationCoords;
   }, [visSubTab, activeStations2D, uniqueStationCoords]);
+
+  // Automatically toggle top labels based on X-Axis type to avoid duplicate redundancy by default
+  useEffect(() => {
+    setChartStyles(prev => ({
+      ...prev,
+      showTopStationLabels: contourXAxis !== 'station'
+    }));
+    setTextSettings(prev => {
+      let labelText = 'Station Index';
+      if (contourXAxis === 'longitude') {
+        const lons = mapStations.map(s => s.longitude).filter(v => v !== undefined && !isNaN(v));
+        const avgLon = lons.length > 0 ? lons.reduce((a, b) => a + b, 0) / lons.length : 0;
+        labelText = avgLon < 0 ? 'Longitude (°W)' : 'Longitude (°E)';
+      } else if (contourXAxis === 'latitude') {
+        const lats = mapStations.map(s => s.latitude).filter(v => v !== undefined && !isNaN(v));
+        const avgLat = lats.length > 0 ? lats.reduce((a, b) => a + b, 0) / lats.length : 0;
+        labelText = avgLat < 0 ? 'Latitude (°S)' : 'Latitude (°N)';
+      }
+      return {
+        ...prev,
+        xAxisLabel: {
+          ...prev.xAxisLabel,
+          text: labelText
+        }
+      };
+    });
+  }, [contourXAxis, mapStations]);
 
   const stationJitteredCoords2D = useMemo(() => {
     const validSamples = processedSamples.filter(
@@ -979,24 +1021,24 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
           } catch (e) {
             fetchErr = e;
           }
-
-          // 2. If local proxy returned 404 (production) or failed, fallback to CORS proxies
+          // 2. If local proxy returned 404 (production) or failed, try direct fetch first (OpenTopoData supports CORS)
           if (!response || response.status === 404) {
             const target = `https://api.opentopodata.org/v1/gebco2020?locations=${encodeURIComponent(locationsParam)}`;
-            
-            // Try corsproxy.io
             try {
-              response = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(target)}`);
-            } catch (e1) {
-              // Try api.allorigins.win as second fallback
+              response = await fetch(target);
+            } catch (dirErr) {
+              // 3. Fallback to CORS proxies if direct fetch fails
               try {
-                response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
-              } catch (e2) {
-                throw new Error("All CORS proxies failed: " + (fetchErr || e1 || e2));
+                response = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(target)}`);
+              } catch (e1) {
+                try {
+                  response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
+                } catch (e2) {
+                  throw new Error("Direct fetch and all CORS proxies failed: " + (fetchErr || dirErr || e1 || e2));
+                }
               }
             }
           }
-
           if (!response || !response.ok) {
             throw new Error(`HTTP error ${response ? response.status : 'unknown'}`);
           }
@@ -1120,35 +1162,25 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       }
     }
   }, [selectedHydroParam, isHydroMode, originalProcessedSamples, hydroSamples]);
-
-  // Automatically align selectedStation and selectedStationsMulti to current active stations list
+  // Automatically align selectedStation and selectedStationsMulti to current active stations list without force-wiping selections
   useEffect(() => {
     if (sortedStationsList.length > 0) {
-      // 1. Single station reset
-      if (!sortedStationsList.includes(selectedStation)) {
+      if (!selectedStation) {
         setSelectedStation(sortedStationsList[0]);
       }
       
-      // 2. Multi stations reset: filter out any stations that are not in the new active list
-      setSelectedStationsMulti(prev => {
-        const valid = prev.filter(st => sortedStationsList.includes(st));
-        // If nothing is valid, default to the first few stations
-        if (valid.length === 0) {
-          return sortedStationsList.slice(0, Math.min(3, sortedStationsList.length));
-        }
-        return valid;
-      });
+      if (selectedStationsMulti.length === 0) {
+        setSelectedStationsMulti(sortedStationsList.slice(0, Math.min(3, sortedStationsList.length)));
+      }
 
-      // 3. Start/End station reset for contour
-      if (!sortedStationsList.includes(contourStartStation)) {
+      if (!contourStartStation) {
         setContourStartStation(sortedStationsList[0]);
       }
-      if (!sortedStationsList.includes(contourEndStation)) {
+      if (!contourEndStation) {
         setContourEndStation(sortedStationsList[sortedStationsList.length - 1]);
       }
     }
   }, [sortedStationsList]);
-
   // Compute data bounds
   const dataBounds = useMemo(() => {
     const valid = processedSamples.filter(s => s.station !== null && s.depth !== null && !s.isRejected && !s.isStd && !s.isBlank);
@@ -1249,6 +1281,23 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       .sort((a, b) => a.depth - b.depth);
   }, [processedSamples, selectedStation]);
 
+  // 1D Unfiltered Chart Data
+  const unfilteredChart1dData = useMemo(() => {
+    if (!selectedStation) return [];
+
+    return processedSamples
+      .filter(s => s.station === selectedStation && s.depth !== null)
+      .map(s => ({
+        depth: s.depth as number,
+        concentration: parseFloat(s.concentration.toFixed(2)),
+        error: parseFloat(s.error.toFixed(2)),
+        sampleName: s.sampleName,
+        rsd: s.rsd,
+        isRejected: s.isRejected
+      }))
+      .sort((a, b) => a.depth - b.depth);
+  }, [processedSamples, selectedStation]);
+
   const lineData = useMemo(() => {
     if (chartStyles.lineType === 'loess') {
       return loessFilter(
@@ -1291,6 +1340,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   const [contourDataPoints, setContourDataPoints] = useState<{ cx: number; cy: number; conc: number; xNorm: number; yNorm: number }[]>([]);
   const [topStationTicks, setTopStationTicks] = useState<{ name: string; cx: number }[]>([]);
   const [bathyPath, setBathyPath] = useState<string>('');
+
+  // Unfiltered Canvas and SVG states
+  const [unfilteredCanvasElement, setUnfilteredCanvasElement] = useState<HTMLCanvasElement | null>(null);
+  const [unfilteredContourSvgPaths, setUnfilteredContourSvgPaths] = useState<{ path: string; value: number }[]>([]);
+  const [unfilteredInterpolatedPoints, setUnfilteredInterpolatedPoints] = useState<{ x: number; y: number; name: string }[]>([]);
+  const [unfilteredContourDataPoints, setUnfilteredContourDataPoints] = useState<{ cx: number; cy: number; conc: number; xNorm: number; yNorm: number; isRejected?: boolean }[]>([]);
+  const [unfilteredTopStationTicks, setUnfilteredTopStationTicks] = useState<{ name: string; cx: number }[]>([]);
+  const [unfilteredBathyPath, setUnfilteredBathyPath] = useState<string>('');
 
   // Floating text double-click handler
   const handleTextDoubleClick = (elementId: keyof TextSettings, e: React.MouseEvent) => {
@@ -1691,6 +1748,61 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       rawY: (s.depth! - minY) / ySpan
     }));
 
+    const getBathyDepthAtX = (xVal: number): number => {
+      if (!highResBathyPoints || highResBathyPoints.length === 0) {
+        const sortedBathy = activeStations2D.map(st => {
+          const stSamples = validSamples.filter(s => s.station === st);
+          const normSt = normalizeStationName(st);
+          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+          const botDepthVal = sc?.botDepth !== undefined ? sc.botDepth
+            : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
+          const stX = stationJitteredCoords2D[st] || 0;
+          return { xVal: stX, depth: botDepthVal };
+        }).sort((a, b) => a.xVal - b.xVal);
+
+        if (sortedBathy.length === 0) return 6000;
+
+        for (let i = 0; i < sortedBathy.length - 1; i++) {
+          if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
+            const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
+            return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
+          }
+        }
+        if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
+        return sortedBathy[sortedBathy.length - 1].depth;
+      }
+
+      const sortedBathy = [...highResBathyPoints].sort((a, b) => a.xVal - b.xVal);
+      for (let i = 0; i < sortedBathy.length - 1; i++) {
+        if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
+          const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
+          return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
+        }
+      }
+      if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
+      return sortedBathy[sortedBathy.length - 1].depth;
+    };
+
+    const isPathBlocked = (pt: typeof dataPoints[0], gridXNorm: number, gridYNorm: number) => {
+      if (!chartStyles.respectBathyBarriers) return false;
+      const xp = minX + gridXNorm * xSpan;
+      const yp = minY + (gridYNorm / anisotropyFactor) * ySpan;
+      const xs = minX + pt.rawX * xSpan;
+      const ys = minY + pt.rawY * ySpan;
+      
+      const steps = 10;
+      for (let k = 1; k < steps; k++) {
+        const t = k / steps;
+        const xt = xp + t * (xs - xp);
+        const yt = yp + t * (ys - yp);
+        const dt = getBathyDepthAtX(xt);
+        if (yt > dt) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     const gridWidth = 80;
     const gridHeight = 80;
     const gridValues = new Float32Array(gridWidth * gridHeight);
@@ -1704,8 +1816,11 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         const gridXNorm = c / (gridWidth - 1);
         const idx = r * gridWidth + c;
         
-        // 1. Interpolate value
-        gridValues[idx] = interpolateIDW(dataPoints, gridXNorm, gridYNorm, idwPower);
+        // Filter out points blocked by seabed topography
+        const unblockedPoints = dataPoints.filter(pt => !isPathBlocked(pt, gridXNorm, gridYNorm));
+        
+        // 1. Interpolate value using only unblocked points (or fallback if all are blocked)
+        gridValues[idx] = interpolateIDW(unblockedPoints.length > 0 ? unblockedPoints : dataPoints, gridXNorm, gridYNorm, idwPower);
         
         // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
         let minDistSq = 999999;
@@ -1726,35 +1841,35 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     if (contourXAxis === 'station') {
       const step = Math.max(1, Math.floor(activeStations2D.length / ticksCount));
       for (let i = 0; i < activeStations2D.length; i += step) {
+        const ratio = Math.max(0, Math.min(1, i / (activeStations2D.length - 1 || 1)));
         labelsList.push({
-          x: (i / (activeStations2D.length - 1 || 1)) * 720,
+          x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
           y: 0,
           name: activeStations2D[i]!
         });
       }
     } else {
       for (let i = 0; i < ticksCount; i++) {
-        const ratio = i / (ticksCount - 1);
+        const ratio = Math.max(0, Math.min(1, i / (ticksCount - 1)));
         const val = minX + ratio * xSpan;
-        const unit = contourXAxis === 'longitude' ? '°E' : '°N';
         labelsList.push({
-          x: ratio * 720,
+          x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
           y: 0,
-          name: `${val.toFixed(1)}${unit}`
+          name: contourXAxis === 'longitude' ? formatLongitude(val) : formatLatitude(val)
         });
       }
     }
 
     const sampleDots = filteredSamples.map(s => {
       const xVal = getXValue(s);
-      const cx = ((xVal - minX) / xSpan) * 720;
+      const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
       const cy = ((s.depth! - minY) / ySpan) * 380;
-      return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan };
+      return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan, station: s.station, depth: s.depth };
     });
 
     const ticks = activeStations2D.map(st => {
       const xVal = stationJitteredCoords2D[st] || 0;
-      const cx = ((xVal - minX) / xSpan) * 720;
+      const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
       return { name: st || '', cx };
     });
 
@@ -1773,7 +1888,199 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       ticks,
       validSamples
     };
-  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis]);
+  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D]);
+
+  // 1b. Decoupled IDW grid and distance field calculations for unfiltered raw data
+  const unfilteredGridData = useMemo(() => {
+    const unfilteredValidSamples = processedSamples.filter(
+      s => s.station !== null && s.depth !== null && !s.isBlank && !s.isStd
+    );
+
+    if (unfilteredValidSamples.length === 0) {
+      return null;
+    }
+
+    const startIdx = sortedStationsList.indexOf(contourStartStation || sortedStationsList[0]);
+    const endIdx = sortedStationsList.indexOf(contourEndStation || sortedStationsList[sortedStationsList.length - 1]);
+    const minIdx = Math.min(startIdx, endIdx);
+    const maxIdx = Math.max(startIdx, endIdx);
+
+    const getXValue = (s: typeof unfilteredValidSamples[0]) => {
+      return stationJitteredCoords2D[s.station!] || 0;
+    };
+
+    const filteredSamples = unfilteredValidSamples.filter(s => {
+      const stIdx = sortedStationsList.indexOf(s.station!);
+      return (
+        s.depth! >= minDepthFilter &&
+        s.depth! <= maxDepthFilter &&
+        stIdx >= minIdx &&
+        stIdx <= maxIdx
+      );
+    });
+
+    if (filteredSamples.length === 0) {
+      return null;
+    }
+
+    const sampleXValues = filteredSamples.map(s => getXValue(s));
+    const minX = sampleXValues.length > 0 ? Math.min(...sampleXValues) : 0;
+    const maxX = sampleXValues.length > 0 ? Math.max(...sampleXValues) : 1;
+    const minY = minDepthFilter;
+    const maxY = maxDepthFilter;
+    const xSpan = maxX - minX || 1;
+    const ySpan = maxY - minY || 1;
+
+    // Normalized points for interpolation
+    const dataPoints = filteredSamples.map(s => ({
+      x: (getXValue(s) - minX) / xSpan,
+      y: ((s.depth! - minY) / ySpan) * anisotropyFactor,
+      z: s.concentration,
+      rawX: (getXValue(s) - minX) / xSpan,
+      rawY: (s.depth! - minY) / ySpan
+    }));
+
+    const getBathyDepthAtX = (xVal: number): number => {
+      if (!highResBathyPoints || highResBathyPoints.length === 0) {
+        const sortedBathy = activeStations2D.map(st => {
+          const stSamples = unfilteredValidSamples.filter(s => s.station === st);
+          const normSt = normalizeStationName(st);
+          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+          const botDepthVal = sc?.botDepth !== undefined ? sc.botDepth
+            : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
+          const stX = stationJitteredCoords2D[st] || 0;
+          return { xVal: stX, depth: botDepthVal };
+        }).sort((a, b) => a.xVal - b.xVal);
+
+        if (sortedBathy.length === 0) return 6000;
+
+        for (let i = 0; i < sortedBathy.length - 1; i++) {
+          if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
+            const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
+            return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
+          }
+        }
+        if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
+        return sortedBathy[sortedBathy.length - 1].depth;
+      }
+
+      const sortedBathy = [...highResBathyPoints].sort((a, b) => a.xVal - b.xVal);
+      for (let i = 0; i < sortedBathy.length - 1; i++) {
+        if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
+          const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
+          return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
+        }
+      }
+      if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
+      return sortedBathy[sortedBathy.length - 1].depth;
+    };
+
+    const isPathBlocked = (pt: typeof dataPoints[0], gridXNorm: number, gridYNorm: number) => {
+      if (!chartStyles.respectBathyBarriers) return false;
+      const xp = minX + gridXNorm * xSpan;
+      const yp = minY + (gridYNorm / anisotropyFactor) * ySpan;
+      const xs = minX + pt.rawX * xSpan;
+      const ys = minY + pt.rawY * ySpan;
+      
+      const steps = 10;
+      for (let k = 1; k < steps; k++) {
+        const t = k / steps;
+        const xt = xp + t * (xs - xp);
+        const yt = yp + t * (ys - yp);
+        const dt = getBathyDepthAtX(xt);
+        if (yt > dt) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const gridWidth = 80;
+    const gridHeight = 80;
+    const gridValues = new Float32Array(gridWidth * gridHeight);
+    const gridDistSq = new Float32Array(gridWidth * gridHeight);
+
+    for (let r = 0; r < gridHeight; r++) {
+      const gridYNorm = (r / (gridHeight - 1)) * anisotropyFactor;
+      const rawY = r / (gridHeight - 1);
+      
+      for (let c = 0; c < gridWidth; c++) {
+        const gridXNorm = c / (gridWidth - 1);
+        const idx = r * gridWidth + c;
+        
+        // Filter out points blocked by seabed topography
+        const unblockedPoints = dataPoints.filter(pt => !isPathBlocked(pt, gridXNorm, gridYNorm));
+        
+        // 1. Interpolate value using only unblocked points (or fallback if all are blocked)
+        gridValues[idx] = interpolateIDW(unblockedPoints.length > 0 ? unblockedPoints : dataPoints, gridXNorm, gridYNorm, idwPower);
+        
+        // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
+        let minDistSq = 999999;
+        for (let i = 0; i < dataPoints.length; i++) {
+          const dx = gridXNorm - dataPoints[i].rawX;
+          const dy = rawY - dataPoints[i].rawY;
+          const distSq = dx * dx + dy * dy;
+          if (distSq < minDistSq) {
+            minDistSq = distSq;
+          }
+        }
+        gridDistSq[idx] = minDistSq;
+      }
+    }
+
+    const ticksCount = 5;
+    const labelsList = [];
+    if (contourXAxis === 'station') {
+      const step = Math.max(1, Math.floor(activeStations2D.length / ticksCount));
+      for (let i = 0; i < activeStations2D.length; i += step) {
+        const ratio = Math.max(0, Math.min(1, i / (activeStations2D.length - 1 || 1)));
+        labelsList.push({
+          x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
+          y: 0,
+          name: activeStations2D[i]!
+        });
+      }
+    } else {
+      for (let i = 0; i < ticksCount; i++) {
+        const ratio = Math.max(0, Math.min(1, i / (ticksCount - 1)));
+        const val = minX + ratio * xSpan;
+        labelsList.push({
+          x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
+          y: 0,
+          name: contourXAxis === 'longitude' ? formatLongitude(val) : formatLatitude(val)
+        });
+      }
+    }
+
+    const sampleDots = filteredSamples.map(s => {
+      const xVal = getXValue(s);
+      const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
+      const cy = ((s.depth! - minY) / ySpan) * 380;
+      return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan, isRejected: s.isRejected, station: s.station, depth: s.depth };
+    });
+
+    const ticks = activeStations2D.map(st => {
+      const xVal = stationJitteredCoords2D[st] || 0;
+      const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
+      return { name: st || '', cx };
+    });
+
+    return {
+      gridValues,
+      gridDistSq,
+      minX,
+      maxX,
+      xSpan,
+      minY,
+      maxY,
+      ySpan,
+      filteredSamples,
+      labelsList,
+      sampleDots,
+      ticks,
+      validSamples: unfilteredValidSamples
+    };
+  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D]);
 
   // Draw contour plot on dependencies change
   useEffect(() => {
@@ -1859,7 +2166,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       const ty = gy - y0;
 
       for (let cx = 0; cx < canvasWidth; cx++) {
-        const gridXRatio = cx / (canvasWidth - 1);
+        const gridXRatio = invertXAxis2D ? (1 - cx / (canvasWidth - 1)) : (cx / (canvasWidth - 1));
         const gx = gridXRatio * (gridWidth - 1);
         const x0 = Math.floor(gx);
         const x1 = Math.min(x0 + 1, gridWidth - 1);
@@ -1934,11 +2241,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     const paths = computedContours.map((contour) => {
       let pathStr = "";
+      let labelX = 0;
+      let labelY = 0;
+      let angle = 0;
       if (contour.coordinates) {
         contour.coordinates.forEach((polygon) => {
           polygon.forEach((ring) => {
             ring.forEach((coord, i) => {
-              const x = coord[0] * scaleX;
+              const x = invertXAxis2D ? (gridWidth - coord[0]) * scaleX : coord[0] * scaleX;
               const y = coord[1] * scaleY;
               if (i === 0) pathStr += `M${x},${y}`;
               else pathStr += `L${x},${y}`;
@@ -1946,10 +2256,33 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             pathStr += "Z";
           });
         });
+
+        if (contour.coordinates[0] && contour.coordinates[0][0]) {
+          const ring = contour.coordinates[0][0];
+          const midIdx = Math.floor(ring.length / 2);
+          if (ring[midIdx]) {
+            labelX = invertXAxis2D ? (gridWidth - ring[midIdx][0]) * scaleX : ring[midIdx][0] * scaleX;
+            labelY = ring[midIdx][1] * scaleY;
+
+            // Calculate tangent angle
+            const p1 = ring[Math.max(0, midIdx - 2)] || ring[midIdx];
+            const p2 = ring[Math.min(ring.length - 1, midIdx + 2)] || ring[midIdx];
+            const dx = (p2[0] - p1[0]) * scaleX * (invertXAxis2D ? -1 : 1);
+            const dy = (p2[1] - p1[1]) * scaleY;
+            if (Math.abs(dx) > 1e-5 || Math.abs(dy) > 1e-5) {
+              angle = Math.atan2(dy, dx) * (180 / Math.PI);
+              if (angle > 90) angle -= 180;
+              if (angle < -90) angle += 180;
+            }
+          }
+        }
       }
       return {
         path: pathStr,
-        value: contour.value
+        value: contour.value,
+        labelX,
+        labelY,
+        angle
       };
     });
     setContourSvgPaths(paths);
@@ -1960,7 +2293,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     if (highResBathyPoints && highResBathyPoints.length > 0) {
       bathyPoints = highResBathyPoints.map(pt => {
-        const cx = ((pt.xVal - minX) / xSpan) * canvasWidth;
+        const cx = invertXAxis2D ? (1 - (pt.xVal - minX) / xSpan) * canvasWidth : ((pt.xVal - minX) / xSpan) * canvasWidth;
         const cy = ((pt.depth - minY) / ySpan) * canvasHeight;
         return { cx, cy };
       });
@@ -1973,7 +2306,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
           || Math.max(...stSamples.map(s => s.depth || 0), 100);
 
         const xVal = stationJitteredCoords2D[st] || 0;
-        const cx = ((xVal - minX) / xSpan) * canvasWidth;
+        const cx = invertXAxis2D ? (1 - (xVal - minX) / xSpan) * canvasWidth : ((xVal - minX) / xSpan) * canvasWidth;
         const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
         return { cx, cy };
       });
@@ -1995,6 +2328,246 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     setTopStationTicks(ticks);
   }, [canvasElement, gridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
 
+  // Draw unfiltered contour plot on dependencies change
+  useEffect(() => {
+    if (!unfilteredCanvasElement || !showUnfilteredComparison) return;
+
+    const canvas = unfilteredCanvasElement;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (!unfilteredGridData) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      setUnfilteredContourSvgPaths([]);
+      setUnfilteredContourDataPoints([]);
+      setUnfilteredInterpolatedPoints([]);
+      return;
+    }
+
+    const {
+      gridValues,
+      gridDistSq,
+      minX,
+      xSpan,
+      minY,
+      ySpan,
+      labelsList,
+      sampleDots,
+      ticks,
+      validSamples
+    } = unfilteredGridData;
+
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+    const imgData = ctx.createImageData(canvasWidth, canvasHeight);
+    const paletteColors = colorsMap[chartStyles.colormap || 'odv'];
+    
+    const colorScale = scaleLinear<string>()
+      .domain([
+        docMin, 
+        docMin + (docMax - docMin) * 0.25, 
+        docMin + (docMax - docMin) * 0.5, 
+        docMin + (docMax - docMin) * 0.75, 
+        docMax
+      ])
+      .range(paletteColors)
+      .clamp(true);
+
+    // Pre-calculate a 256-color Lookup Table (LUT)
+    const lut = new Uint8ClampedArray(256 * 3);
+    for (let i = 0; i < 256; i++) {
+      const ratio = i / 255;
+      const valForLut = docMin + ratio * (docMax - docMin || 1);
+      const hexColor = colorScale(valForLut);
+      let rVal = 0, gVal = 0, bVal = 0;
+      if (hexColor.startsWith('#')) {
+        rVal = parseInt(hexColor.slice(1, 3), 16);
+        gVal = parseInt(hexColor.slice(3, 5), 16);
+        bVal = parseInt(hexColor.slice(5, 7), 16);
+      } else {
+        const match = hexColor.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i);
+        if (match) {
+          rVal = parseInt(match[1], 10);
+          gVal = parseInt(match[2], 10);
+          bVal = parseInt(match[3], 10);
+        }
+      }
+      lut[i * 3] = rVal;
+      lut[i * 3 + 1] = gVal;
+      lut[i * 3 + 2] = bVal;
+    }
+
+    const maskDistanceSq = chartStyles.maskDistance * chartStyles.maskDistance;
+    const gridWidth = 80;
+    const gridHeight = 80;
+
+    for (let cy = 0; cy < canvasHeight; cy++) {
+      const gridYRatio = cy / (canvasHeight - 1);
+      const gy = gridYRatio * (gridHeight - 1);
+      const y0 = Math.floor(gy);
+      const y1 = Math.min(y0 + 1, gridHeight - 1);
+      const ty = gy - y0;
+
+      for (let cx = 0; cx < canvasWidth; cx++) {
+        const gridXRatio = invertXAxis2D ? (1 - cx / (canvasWidth - 1)) : (cx / (canvasWidth - 1));
+        const gx = gridXRatio * (gridWidth - 1);
+        const x0 = Math.floor(gx);
+        const x1 = Math.min(x0 + 1, gridWidth - 1);
+        const tx = gx - x0;
+
+        const v00 = gridValues[y0 * gridWidth + x0];
+        const v10 = gridValues[y0 * gridWidth + x1];
+        const v01 = gridValues[y1 * gridWidth + x0];
+        const v11 = gridValues[y1 * gridWidth + x1];
+
+        let val = v00 * (1 - tx) * (1 - ty) +
+          v10 * tx * (1 - ty) +
+          v01 * (1 - tx) * ty +
+          v11 * tx * ty;
+
+        const d00 = gridDistSq[y0 * gridWidth + x0];
+        const d10 = gridDistSq[y0 * gridWidth + x1];
+        const d01 = gridDistSq[y1 * gridWidth + x0];
+        const d11 = gridDistSq[y1 * gridWidth + x1];
+
+        const distSq = d00 * (1 - tx) * (1 - ty) +
+          d10 * tx * (1 - ty) +
+          d01 * (1 - tx) * ty +
+          d11 * tx * ty;
+
+        if (chartStyles.colorBanding === 'discrete') {
+          const stepsCount = Math.floor((val - docMin) / contourStep);
+          val = docMin + stepsCount * contourStep + contourStep / 2;
+        }
+
+        const pixelIdx = (cy * canvasWidth + cx) * 4;
+        
+        if (distSq > maskDistanceSq) {
+          imgData.data[pixelIdx] = 255;
+          imgData.data[pixelIdx + 1] = 255;
+          imgData.data[pixelIdx + 2] = 255;
+          imgData.data[pixelIdx + 3] = 0;
+          continue;
+        }
+
+        const valRatio = (val - docMin) / (docMax - docMin || 1);
+        const lutIdx = Math.max(0, Math.min(255, Math.floor(valRatio * 255)));
+        const rVal = lut[lutIdx * 3];
+        const gVal = lut[lutIdx * 3 + 1];
+        const bVal = lut[lutIdx * 3 + 2];
+
+        imgData.data[pixelIdx] = rVal;
+        imgData.data[pixelIdx + 1] = gVal;
+        imgData.data[pixelIdx + 2] = bVal;
+        imgData.data[pixelIdx + 3] = 230;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    const thresholds = [];
+    for (let t = docMin; t <= docMax; t += contourStep) {
+      thresholds.push(t);
+    }
+
+    const contourGenerator = contours()
+      .size([gridWidth, gridHeight])
+      .thresholds(thresholds);
+
+    const computedContours = contourGenerator(Array.from(gridValues));
+    const scaleX = canvasWidth / gridWidth;
+    const scaleY = canvasHeight / gridHeight;
+
+    const paths = computedContours.map((contour) => {
+      let pathStr = "";
+      let labelX = 0;
+      let labelY = 0;
+      let angle = 0;
+      if (contour.coordinates) {
+        contour.coordinates.forEach((polygon) => {
+          polygon.forEach((ring) => {
+            ring.forEach((coord, i) => {
+              const x = invertXAxis2D ? (gridWidth - coord[0]) * scaleX : coord[0] * scaleX;
+              const y = coord[1] * scaleY;
+              if (i === 0) pathStr += `M${x},${y}`;
+              else pathStr += `L${x},${y}`;
+            });
+            pathStr += "Z";
+          });
+        });
+
+        if (contour.coordinates[0] && contour.coordinates[0][0]) {
+          const ring = contour.coordinates[0][0];
+          const midIdx = Math.floor(ring.length / 2);
+          if (ring[midIdx]) {
+            labelX = invertXAxis2D ? (gridWidth - ring[midIdx][0]) * scaleX : ring[midIdx][0] * scaleX;
+            labelY = ring[midIdx][1] * scaleY;
+
+            // Calculate tangent angle
+            const p1 = ring[Math.max(0, midIdx - 2)] || ring[midIdx];
+            const p2 = ring[Math.min(ring.length - 1, midIdx + 2)] || ring[midIdx];
+            const dx = (p2[0] - p1[0]) * scaleX * (invertXAxis2D ? -1 : 1);
+            const dy = (p2[1] - p1[1]) * scaleY;
+            if (Math.abs(dx) > 1e-5 || Math.abs(dy) > 1e-5) {
+              angle = Math.atan2(dy, dx) * (180 / Math.PI);
+              if (angle > 90) angle -= 180;
+              if (angle < -90) angle += 180;
+            }
+          }
+        }
+      }
+      return {
+        path: pathStr,
+        value: contour.value,
+        labelX,
+        labelY,
+        angle
+      };
+    });
+    setUnfilteredContourSvgPaths(paths);
+    setUnfilteredContourDataPoints(sampleDots);
+    setUnfilteredInterpolatedPoints(labelsList);
+
+    let bathyPoints: { cx: number; cy: number }[] = [];
+
+    if (highResBathyPoints && highResBathyPoints.length > 0) {
+      bathyPoints = highResBathyPoints.map(pt => {
+        const cx = invertXAxis2D ? (1 - (pt.xVal - minX) / xSpan) * canvasWidth : ((pt.xVal - minX) / xSpan) * canvasWidth;
+        const cy = ((pt.depth - minY) / ySpan) * canvasHeight;
+        return { cx, cy };
+      });
+    } else {
+      bathyPoints = activeStations2D.map(st => {
+        const stSamples = validSamples.filter(s => s.station === st);
+        const normSt = normalizeStationName(st);
+        const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
+        const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
+          || Math.max(...stSamples.map(s => s.depth || 0), 100);
+
+        const xVal = stationJitteredCoords2D[st] || 0;
+        const cx = invertXAxis2D ? (1 - (xVal - minX) / xSpan) * canvasWidth : ((xVal - minX) / xSpan) * canvasWidth;
+        const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
+        return { cx, cy };
+      });
+    }
+
+    bathyPoints.sort((a, b) => a.cx - b.cx);
+
+    let pathStr = "";
+    if (bathyPoints.length > 0) {
+      pathStr = `M0,${canvasHeight}`;
+      pathStr += ` L0,${Math.max(0, Math.min(canvasHeight, bathyPoints[0].cy))}`;
+      bathyPoints.forEach(pt => {
+        pathStr += ` L${Math.max(0, Math.min(canvasWidth, pt.cx))},${Math.max(0, Math.min(canvasHeight, pt.cy))}`;
+      });
+      pathStr += ` L${canvasWidth},${Math.max(0, Math.min(canvasHeight, bathyPoints[bathyPoints.length - 1].cy))}`;
+      pathStr += ` L${canvasWidth},${canvasHeight} Z`;
+    }
+    setUnfilteredBathyPath(pathStr);
+    setUnfilteredTopStationTicks(ticks);
+  }, [unfilteredCanvasElement, showUnfilteredComparison, unfilteredGridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
+
   // Calculate adaptive axis and legend title variables
   const maxDepthLabelLength = Math.max(...[0.0, 0.25, 0.5, 0.75, 1.0].map(r => (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0).length));
   const estimatedYTickWidth = maxDepthLabelLength * (textSettings.ticksLabels.fontSize || 8.5) * 0.6;
@@ -2004,7 +2577,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   const autoXAxisTitleY = 488 + (textSettings.ticksLabels.fontSize || 8.5) + 18;
   const xAxisTitleY = autoXAxisTitleY + (chartStyles.xAxisTitleOffset || 0);
 
-  const colorbarTitleX = 850 + chartStyles.colorbarWidth / 2;
+  const colorbarTitleX = 850 + chartStyles.colorbarWidth / 2 + (chartStyles.colorbarTitleXOffset || 0);
   const colorbarTitleY = 80 - (chartStyles.colorbarTitleOffset || 0);
 
   return (
@@ -2614,6 +3187,10 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}>
                     <input type="checkbox" checked={chartStyles.show1DGridY} onChange={e => setChartStyles(prev => ({ ...prev, show1DGridY: e.target.checked }))} />
                     <span>显示纵向网格线 (Gridlines Y)</span>
+                  </label>
+                  <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 'bold', color: 'var(--primary-color, #0284c7)' }}>
+                    <input type="checkbox" checked={showUnfilteredComparison} onChange={e => setShowUnfilteredComparison(e.target.checked)} />
+                    <span>显示原始未筛选对照图 (对比质控)</span>
                   </label>
                 </div>
 
@@ -3293,6 +3870,344 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               <span>拖拽上方的图例框可以自由改变其位置，双击主标题、图例均可触发即时样式配置。</span>
             </div>
           </div>
+
+          {showUnfilteredComparison && (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', margin: '20px 0 0 0', border: '1px dashed #ef4444' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <h3 style={{ margin: 0, fontFamily: textSettings.title.fontFamily, fontSize: `${textSettings.title.fontSize + 2}px`, color: '#dc2626', fontWeight: 'bold' }}>
+                    {stationMode1D === 'single'
+                      ? (selectedStation ? `${selectedStation} 站位 DOC 垂直剖面图 (原始未筛选对比)` : '原始未筛选对比图')
+                      : `多站对比 DOC 垂直剖面图 (原始未筛选对比)`
+                    }
+                  </h3>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#dc2626', fontWeight: 600 }}>
+                    ⚠️ 此对照图包含已被废弃的数据点（以红色方形标记呈现），可与上方质控后的图表进行直观对比。
+                  </p>
+                </div>
+              </div>
+
+              {/* 1D Plot Container for unfiltered */}
+              <div style={{ width: '100%', minHeight: '400px', height: (stationMode1D === 'multi' && multiLayout1D === 'grid') ? 'auto' : '400px', position: 'relative', overflowY: 'auto' }}>
+                {(stationMode1D === 'single' ? unfilteredChart1dData.length === 0 : selectedStationsMulti.length === 0) ? (
+                  <div style={{ height: '400px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
+                    {stationMode1D === 'single' ? '该站位没有可绘制的深度数据点' : '请在左侧多选需要对比的站位'}
+                  </div>
+                ) : (stationMode1D === 'multi' && multiLayout1D === 'grid') ? (
+                  /* Small Multiples Grid Layout */
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                    gap: '16px',
+                    width: '100%',
+                    padding: '8px'
+                  }}>
+                    {(() => {
+                      let activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                      activeStations = [...activeStations].sort((a, b) => sortedStationsList1D.indexOf(a) - sortedStationsList1D.indexOf(b));
+                      return activeStations.map((st, idx) => {
+                        const stData = processedSamples
+                          .filter(s => s.station === st && s.depth !== null)
+                          .map(s => ({
+                            depth: s.depth as number,
+                            concentration: parseFloat(s.concentration.toFixed(2)),
+                            error: parseFloat(s.error.toFixed(2)),
+                            sampleName: s.sampleName,
+                            rsd: s.rsd,
+                            isRejected: s.isRejected
+                          }))
+                          .sort((a, b) => a.depth - b.depth);
+
+                        if (stData.length === 0) {
+                          return (
+                            <div key={st} className="card" style={{ height: '260px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8', fontSize: '12px' }}>
+                              {st} 站无数据
+                            </div>
+                          );
+                        }
+
+                        const fill = MULTI_COLORS[idx % MULTI_COLORS.length];
+                        
+                        const stLineData = chartStyles.lineType === 'loess'
+                          ? loessFilter(stData.map(d => ({ x: d.concentration, y: d.depth })), chartStyles.lineSmoothness ?? 0.75).map(pt => ({
+                              concentration: pt.x,
+                              depth: pt.y
+                            }))
+                          : stData;
+
+                        const subplotTopMargin = chartStyles.subplotMarginTop ?? 25;
+                        const subplotBottomMargin = chartStyles.subplotXAxisOrientation === 'bottom' ? 30 : 5;
+                        const subplotXAxisOrientation = chartStyles.subplotXAxisOrientation ?? 'top';
+                        const subplotTickMargin = chartStyles.tickMargin1D ?? 6;
+
+                        return (
+                          <div key={st} style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '4px', border: '1px dashed #fca5a5', borderRadius: '8px', backgroundColor: '#fff5f5', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #fee2e2', paddingBottom: '4px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#dc2626' }}>测站: {st} (未筛选)</span>
+                            </div>
+                            <div style={{ width: '100%', height: '220px', position: 'relative' }}>
+                              <ResponsiveContainer width="100%" height="100%">
+                                <ScatterChart margin={{ top: subplotTopMargin, right: 15, bottom: subplotBottomMargin, left: 10 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridStroke1D || '#cbd5e1'} vertical={chartStyles.show1DGridX} horizontal={chartStyles.show1DGridY} />
+                                  <XAxis
+                                    type="number"
+                                    dataKey="concentration"
+                                    name={isHydroMode ? selectedHydroParam : "浓度"}
+                                    unit={isHydroMode ? "" : " µmol/L"}
+                                    stroke={chartStyles.axisStroke1D || '#475569'}
+                                    fontSize={9}
+                                    fontWeight="600"
+                                    domain={sharedXDomain}
+                                    orientation={subplotXAxisOrientation}
+                                    axisLine={{ stroke: chartStyles.axisStroke1D }}
+                                    tickLine={{ stroke: chartStyles.axisStroke1D }}
+                                    tickSize={chartStyles.tickDirection1D === 'inward' ? -4 : 4}
+                                    tickMargin={subplotTickMargin}
+                                  />
+                                  <YAxis
+                                    type="number"
+                                    dataKey="depth"
+                                    name="深度"
+                                    unit=" m"
+                                    stroke={chartStyles.axisStroke1D || '#475569'}
+                                    fontSize={9}
+                                    fontWeight="600"
+                                    reversed={chartStyles.invertYAxis1D ?? true}
+                                    tickMargin={subplotTickMargin}
+                                    domain={sharedYDomain}
+                                    axisLine={{ stroke: chartStyles.axisStroke1D }}
+                                    tickLine={{ stroke: chartStyles.axisStroke1D }}
+                                    tickSize={chartStyles.tickDirection1D === 'inward' ? -4 : 4}
+                                  />
+                                  <Tooltip
+                                    cursor={{ stroke: '#dc2626', strokeWidth: 1, strokeDasharray: '4 4' }}
+                                    contentStyle={{
+                                      backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                                      borderRadius: '6px',
+                                      border: '1px solid #fca5a5',
+                                      fontSize: '11px',
+                                      padding: '6px'
+                                    }}
+                                  />
+                                  {chartStyles.lineType !== 'none' && (
+                                    <Scatter
+                                      name="连线"
+                                      data={stLineData}
+                                      fill="none"
+                                      line={{ stroke: fill, strokeWidth: chartStyles.lineWidth || 2, type: curveType }}
+                                      shape={() => <path d="" />}
+                                      legendType="none"
+                                    />
+                                  )}
+                                  <Scatter
+                                    name={st}
+                                    data={stData}
+                                    fill="none"
+                                    shape={(props: any) => {
+                                      const { cx, cy, payload } = props;
+                                      const isPointRejected = payload && payload.isRejected;
+                                      const size = isPointRejected ? 10 : (chartStyles.pointRadius * 2 || 10) * 0.9;
+                                      const pFill = isPointRejected ? 'rgba(239, 68, 68, 0.4)' : fill;
+                                      const pStroke = isPointRejected ? '#dc2626' : '#ffffff';
+                                      const pStrokeWidth = isPointRejected ? 2 : 1.2;
+                                      const shapeType = isPointRejected ? 'square' : MULTI_SHAPES[idx % MULTI_SHAPES.length];
+                                      return renderCustomPointShape(cx, cy, size, pFill, pStroke, pStrokeWidth, shapeType);
+                                    }}
+                                  >
+                                    {chartStyles.showErrorBar && (
+                                      <ErrorBar
+                                        dataKey="error"
+                                        direction="x"
+                                        stroke={chartStyles.errorBarColor || '#94a3b8'}
+                                        strokeWidth={1}
+                                        width={chartStyles.errorBarCapWidth || 4}
+                                      />
+                                    )}
+                                  </Scatter>
+                                </ScatterChart>
+                              </ResponsiveContainer>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  /* Overlay Mode */
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart margin={{ top: 30, right: 30, bottom: 20, left: 30 }}>
+                      <defs>
+                        <linearGradient id="lineGradUnfiltered" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#fca5a5" />
+                          <stop offset="100%" stopColor="#dc2626" />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridStroke1D || '#cbd5e1'} vertical={chartStyles.show1DGridX} horizontal={chartStyles.show1DGridY} />
+                      <XAxis
+                        type="number"
+                        dataKey="concentration"
+                        name={isHydroMode ? selectedHydroParam : "DOC 浓度"}
+                        unit={isHydroMode ? "" : " µmol/L"}
+                        stroke={chartStyles.axisStroke1D || '#475569'}
+                        fontSize={11}
+                        fontWeight="600"
+                        domain={['dataMin - 5', 'dataMax + 5']}
+                        orientation="top"
+                        axisLine={{ stroke: chartStyles.axisStroke1D }}
+                        tickLine={{ stroke: chartStyles.axisStroke1D }}
+                        tickSize={chartStyles.tickDirection1D === 'inward' ? -6 : 6}
+                      />
+                      <YAxis
+                        type="number"
+                        dataKey="depth"
+                        name="深度"
+                        unit=" m"
+                        stroke={chartStyles.axisStroke1D || '#475569'}
+                        fontSize={11}
+                        fontWeight="600"
+                        reversed={chartStyles.invertYAxis1D ?? true}
+                        domain={[0, 'dataMax + 100']}
+                        axisLine={{ stroke: chartStyles.axisStroke1D }}
+                        tickLine={{ stroke: chartStyles.axisStroke1D }}
+                        tickSize={chartStyles.tickDirection1D === 'inward' ? -6 : 6}
+                      />
+                      <Tooltip
+                        cursor={{ stroke: '#dc2626', strokeWidth: 1, strokeDasharray: '4 4' }}
+                        contentStyle={{
+                          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                          borderRadius: '8px',
+                          border: '1px solid #fca5a5',
+                          fontSize: '12px'
+                        }}
+                      />
+                      
+                      {stationMode1D === 'single' ? (
+                        <>
+                          {chartStyles.lineType !== 'none' && (
+                            <Scatter
+                              name="DOC 连线"
+                              data={chartStyles.lineType === 'smooth'
+                                ? loessFilter(unfilteredChart1dData.map(d => ({ x: d.concentration, y: d.depth })), chartStyles.lineSmoothness ?? 0.75).map(pt => ({ concentration: pt.x, depth: pt.y }))
+                                : unfilteredChart1dData
+                              }
+                              fill="none"
+                              line={{ stroke: '#dc2626', strokeWidth: chartStyles.lineWidth || 2, type: curveType }}
+                              shape={() => <path d="" />}
+                              legendType="none"
+                            />
+                          )}
+                          <Scatter
+                            name="DOC 原始值"
+                            data={unfilteredChart1dData}
+                            fill="none"
+                            shape={(props: any) => {
+                              const { cx, cy, payload } = props;
+                              const isPointRejected = payload && payload.isRejected;
+                              const size = isPointRejected ? 10 : (chartStyles.pointRadius * 2 || 10);
+                              const pFill = isPointRejected ? 'rgba(239, 68, 68, 0.4)' : '#dc2626';
+                              const pStroke = isPointRejected ? '#dc2626' : '#ffffff';
+                              const pStrokeWidth = isPointRejected ? 2 : (chartStyles.pointStrokeWidth || 1.5);
+                              const shapeType = isPointRejected ? 'square' : (chartStyles.symbolShape || 'circle');
+                              return renderCustomPointShape(cx, cy, size, pFill, pStroke, pStrokeWidth, shapeType);
+                            }}
+                          >
+                            {chartStyles.showErrorBar && (
+                              <ErrorBar
+                                dataKey="error"
+                                direction="x"
+                                stroke={chartStyles.errorBarColor || '#94a3b8'}
+                                strokeWidth={1}
+                                width={chartStyles.errorBarCapWidth || 4}
+                              />
+                            )}
+                          </Scatter>
+                        </>
+                      ) : (
+                        (() => {
+                          const activeStations = selectedStationsMulti.length > 0 ? selectedStationsMulti : (selectedStation ? [selectedStation] : []);
+                          return activeStations.flatMap((st, idx) => {
+                            const stData = processedSamples
+                              .filter(s => s.station === st && s.depth !== null)
+                              .map(s => ({
+                                depth: s.depth as number,
+                                concentration: parseFloat(s.concentration.toFixed(2)),
+                                error: parseFloat(s.error.toFixed(2)),
+                                sampleName: s.sampleName,
+                                rsd: s.rsd,
+                                isRejected: s.isRejected
+                              }))
+                              .sort((a, b) => a.depth - b.depth);
+
+                            if (stData.length === 0) return [];
+
+                            const isFocused = focusedStation1D === st;
+                            const isAnyFocused = focusedStation1D !== '';
+                            const isDimmed = isAnyFocused && !isFocused;
+                            
+                            const fill = isDimmed ? '#cbd5e1' : MULTI_COLORS[idx % MULTI_COLORS.length];
+                            const stroke = isDimmed ? '#f1f5f9' : '#ffffff';
+                            const opacity = isDimmed ? 0.35 : 1.0;
+                            const lineWidth = isFocused ? 3.5 : (isDimmed ? 1.0 : (chartStyles.lineWidth || 2));
+                            const shapeType = MULTI_SHAPES[idx % MULTI_SHAPES.length];
+                            
+                            const stLineData = chartStyles.lineType === 'loess'
+                              ? loessFilter(stData.map(d => ({ x: d.concentration, y: d.depth })), chartStyles.lineSmoothness ?? 0.75).map(pt => ({
+                                  concentration: pt.x,
+                                  depth: pt.y
+                                }))
+                              : stData;
+
+                            return [
+                              ...(chartStyles.lineType !== 'none' ? [
+                                <Scatter
+                                  key={`${st}-line-unf`}
+                                  name={`${st} 连线`}
+                                  data={stLineData}
+                                  fill="none"
+                                  line={{ stroke: fill, strokeWidth: lineWidth, type: curveType }}
+                                  shape={() => <path d="" />}
+                                  legendType="none"
+                                  opacity={opacity}
+                                />
+                              ] : []),
+                              <Scatter
+                                key={`${st}-points-unf`}
+                                name={st}
+                                data={stData}
+                                fill="none"
+                                opacity={opacity}
+                                shape={(props: any) => {
+                                  const { cx, cy, payload } = props;
+                                  const isPointRejected = payload && payload.isRejected;
+                                  const size = isPointRejected ? 10 : (chartStyles.pointRadius * 2 || 10);
+                                  const pFill = isPointRejected ? 'rgba(239, 68, 68, 0.4)' : fill;
+                                  const pStroke = isPointRejected ? '#dc2626' : stroke;
+                                  const pStrokeWidth = isPointRejected ? 2 : 1.5;
+                                  const pShapeType = isPointRejected ? 'square' : shapeType;
+                                  return renderCustomPointShape(cx, cy, size, pFill, pStroke, pStrokeWidth, pShapeType);
+                                }}
+                              >
+                                {chartStyles.showErrorBar && (
+                                  <ErrorBar
+                                    dataKey="error"
+                                    direction="x"
+                                    stroke={isDimmed ? '#cbd5e1' : (chartStyles.errorBarColor || '#94a3b8')}
+                                    strokeWidth={isFocused ? 1.5 : 1}
+                                    width={chartStyles.errorBarCapWidth || 4}
+                                  />
+                                )}
+                              </Scatter>
+                            ];
+                          });
+                        })()
+                      )}
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+          )}
+
           <StationMap
             stations={mapStations}
             selectedStation={selectedStation}
@@ -3574,6 +4489,18 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   </div>
 
                   <div className="input-group">
+                    <label className="input-label">深度轴刻度步长 (m)</label>
+                    <input
+                      type="number"
+                      className="input-field"
+                      value={depthTickStep}
+                      onChange={e => setDepthTickStep(parseFloat(e.target.value) || 100)}
+                      step="50"
+                      min="10"
+                    />
+                  </div>
+
+                  <div className="input-group">
                     <label className="input-label">IDW 插值权重幂次方 (Power)</label>
                     <input
                       type="number"
@@ -3617,7 +4544,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                         setSliderMaskDistance(val);
                         if (maskDebounceTimer.current) clearTimeout(maskDebounceTimer.current);
                         maskDebounceTimer.current = setTimeout(() => {
-                          setChartStyles(prev => ({ ...prev, maskDistance: val }));
+                           setChartStyles(prev => ({ ...prev, maskDistance: val }));
                         }, 60);
                       }}
                     />
@@ -3637,6 +4564,41 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       <option value="latitude">纬度 (Latitude)</option>
                     </select>
                   </div>
+
+                  <div className="input-group" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
+                      <input
+                        type="checkbox"
+                        checked={invertXAxis2D}
+                        onChange={e => setInvertXAxis2D(e.target.checked)}
+                      />
+                      <span>反转横轴方向 (Invert X-Axis)</span>
+                    </label>
+                    <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
+                      <input
+                        type="checkbox"
+                        checked={showContourLabels}
+                        onChange={e => setShowContourLabels(e.target.checked)}
+                      />
+                      <span>显示等值线标签 (Show Contour Labels)</span>
+                    </label>
+                  </div>
+
+                  {showContourLabels && (
+                    <div className="input-group">
+                      <label className="input-label" style={{ fontSize: '11px' }}>等值线标签显示范围</label>
+                      <select
+                        className="input-field text-xs font-semibold"
+                        style={{ padding: '4px 6px' }}
+                        value={contourLabelMode}
+                        onChange={e => setContourLabelMode(e.target.value as any)}
+                      >
+                        <option value="multiplesOf10">仅标注整十数值 (推荐，如 50, 60, 70)</option>
+                        <option value="every2nd">每隔一条线标注 (每 2 级标注一次)</option>
+                        <option value="all">标注所有等值线 (可能较凌乱)</option>
+                      </select>
+                    </div>
+                  )}
 
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <h4 className="font-semibold text-xs text-slate-600" style={{ margin: 0 }}>断面范围筛选 (Zoom/Filter)</h4>
@@ -3820,6 +4782,13 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       </div>
                     )}
                   </div>
+
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px', marginTop: '10px' }}>
+                    <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '11px', fontWeight: 'bold', color: 'var(--primary-color, #0284c7)' }}>
+                      <input type="checkbox" checked={showUnfilteredComparison} onChange={e => setShowUnfilteredComparison(e.target.checked)} />
+                      <span>显示原始未筛选对照图 (对比质控)</span>
+                    </label>
+                  </div>
                 </div>
               )}
 
@@ -3880,6 +4849,10 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                         <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
                           <input type="checkbox" checked={chartStyles.closedBorderTicks} onChange={e => setChartStyles(prev => ({ ...prev, closedBorderTicks: e.target.checked }))} />
                           <span>开启四周对称封闭轴框 (Closed Box Ticks)</span>
+                        </label>
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', color: 'var(--primary-color, #0284c7)' }}>
+                          <input type="checkbox" checked={chartStyles.respectBathyBarriers ?? true} onChange={e => setChartStyles(prev => ({ ...prev, respectBathyBarriers: e.target.checked }))} />
+                          <span>遵循水深地形屏障 (Respect Bathymetry Barriers)</span>
                         </label>
                       </div>
 
@@ -4040,6 +5013,22 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                             style={{ width: '100%' }}
                           />
                         </div>
+
+                        <div className="input-group" style={{ marginBottom: '6px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                            <span>色标标题右偏: {chartStyles.colorbarTitleXOffset || 0}px</span>
+                            <span>左右移动</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="-80"
+                            max="80"
+                            step="1"
+                            value={chartStyles.colorbarTitleXOffset || 0}
+                            onChange={e => setChartStyles(prev => ({ ...prev, colorbarTitleXOffset: parseInt(e.target.value) }))}
+                            style={{ width: '100%' }}
+                          />
+                        </div>
                       </div>
 
                      {/* Color Adjusters */}
@@ -4193,6 +5182,47 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                     );
                   })}
 
+                  {/* Contour value labels */}
+                  {showContourLabels && contourSvgPaths.map((p: { path: string; value: number; labelX?: number; labelY?: number; angle?: number }, i: number) => {
+                    if (p.labelX === undefined || p.labelY === undefined || p.labelX === 0 || p.labelY === 0) return null;
+                    
+                    let shouldShow = true;
+                    if (contourLabelMode === 'multiplesOf10') {
+                      shouldShow = Math.round(p.value * 10) % 100 === 0;
+                    } else if (contourLabelMode === 'every2nd') {
+                      shouldShow = i % 2 === 0;
+                    }
+                    if (!shouldShow) return null;
+
+                    return (
+                      <g key={`label-${i}`} transform={`translate(${p.labelX + 80}, ${p.labelY + 90}) rotate(${p.angle || 0})`}>
+                        <rect
+                          x={-14}
+                          y={-6}
+                          width={28}
+                          height={12}
+                          fill="#ffffff"
+                          opacity={0.85}
+                          rx={2}
+                          ry={2}
+                        />
+                        <text
+                          x={0}
+                          y={3}
+                          textAnchor="middle"
+                          fill={chartStyles.axisStroke === '#ffffff' ? '#000000' : chartStyles.axisStroke}
+                          style={{
+                            fontSize: '8px',
+                            fontFamily: chartStyles.fontFamily,
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          {p.value}
+                        </text>
+                      </g>
+                    );
+                  })}
+
                   {/* Bathymetry Sea Floor Silhouette Masking */}
                   {bathyPath && (
                     <path
@@ -4205,7 +5235,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   )}
 
                   {/* Black dots overlay representing measurement depth/locations */}
-                  {(chartStyles.showPoints2D ?? true) && contourDataPoints.map((pt, i) => (
+                  {(chartStyles.showPoints2D ?? true) && contourDataPoints.map((pt: any, i) => (
                     <circle
                       key={i}
                       cx={pt.cx + 80}
@@ -4214,8 +5244,23 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       fill={chartStyles.pointFill2D ?? chartStyles.pointFill ?? '#000000'}
                       stroke={chartStyles.pointStroke2D ?? chartStyles.pointStroke ?? '#ffffff'}
                       strokeWidth={chartStyles.pointStrokeWidth2D ?? chartStyles.pointStrokeWidth ?? 0.75}
+                      style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                      onMouseEnter={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const containerRect = containerRef.current?.getBoundingClientRect();
+                        if (containerRect) {
+                          setHoveredPoint2D({
+                            station: pt.station || '',
+                            depth: pt.depth || 0,
+                            concentration: pt.conc,
+                            x: rect.left - containerRect.left + rect.width / 2,
+                            y: rect.top - containerRect.top - 8
+                          });
+                        }
+                      }}
+                      onMouseLeave={() => setHoveredPoint2D(null)}
                     >
-                      <title>浓度: {pt.conc.toFixed(2)} µmol/L</title>
+                      <title>站位: {pt.station || '未知'} | 深度: {pt.depth || 0}m | 浓度: {pt.conc.toFixed(2)}</title>
                     </circle>
                   ))}
                 </g>
@@ -4244,25 +5289,41 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </text>
 
                 {/* Left Y-Axis Ticks & Labels */}
-                {[0.0, 0.25, 0.5, 0.75, 1.0].map((r, i) => {
-                  const depthVal = (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0);
-                  const yPos = 90 + 380 * r;
+                {(() => {
+                  const ticks = [];
+                  const start = Math.ceil(minDepthFilter / depthTickStep) * depthTickStep;
+                  for (let val = start; val <= maxDepthFilter; val += depthTickStep) {
+                    ticks.push(val);
+                  }
+                  if (ticks.length === 0) {
+                    return [0.0, 0.25, 0.5, 0.75, 1.0].map(r => {
+                      const depthVal = (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0);
+                      const yPos = 90 + 380 * r;
+                      return { depthVal, yPos };
+                    });
+                  }
+                  return ticks.map(val => {
+                    const r = (val - minDepthFilter) / (maxDepthFilter - minDepthFilter || 1);
+                    const yPos = 90 + 380 * r;
+                    return { depthVal: val.toFixed(0), yPos };
+                  });
+                })().map((tick, i) => {
                   const isOutward = chartStyles.tickDirection === 'outward';
                   const tickX = isOutward ? 75 : 85;
 
                   return (
                     <g key={i}>
                       {/* Left border tick */}
-                      <line x1={tickX} y1={yPos} x2={80} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                      <line x1={tickX} y1={tick.yPos} x2={80} y2={tick.yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
                       
                       {/* Optional Right border tick (Closed Box symmetry) */}
                       {chartStyles.closedBorderTicks && (
-                        <line x1={800} y1={yPos} x2={isOutward ? 805 : 795} y2={yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                        <line x1={800} y1={tick.yPos} x2={isOutward ? 805 : 795} y2={tick.yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
                       )}
                       
                       <text
                         x={70}
-                        y={yPos + 4}
+                        y={tick.yPos + 4}
                         fill={textSettings.ticksLabels.color}
                         style={{
                           fontFamily: textSettings.ticksLabels.fontFamily,
@@ -4275,7 +5336,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                         textAnchor="end"
                         onDoubleClick={(e) => handleTextDoubleClick('ticksLabels', e)}
                       >
-                        {depthVal}
+                        {tick.depthVal}
                       </text>
                     </g>
                   );
@@ -4587,6 +5648,346 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               <span>■ 灰色阴影：海底地形 (海床)</span>
             </div>
           </div>
+
+          {showUnfilteredComparison && (
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', minWidth: '930px', overflowX: 'auto', margin: '20px 0 0 0', border: '1px dashed #ef4444' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', width: '100%' }}>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <h3
+                    style={{
+                      margin: 0,
+                      fontFamily: textSettings.title.fontFamily,
+                      fontSize: `${textSettings.title.fontSize + 2}px`,
+                      color: '#dc2626',
+                      fontWeight: 'bold',
+                      fontStyle: textSettings.title.fontStyle,
+                    }}
+                  >
+                    {textSettings.title.text} (原始未筛选对比)
+                  </h3>
+                  <p
+                    style={{
+                      margin: '4px 0 0 0',
+                      fontFamily: textSettings.subtitle.fontFamily,
+                      fontSize: `${textSettings.subtitle.fontSize}px`,
+                      color: '#dc2626',
+                      fontWeight: 600,
+                      fontStyle: 'normal',
+                    }}
+                  >
+                    ⚠️ 此对照图包含已被废弃的数据点（以红色方形标记呈现），可与上方质控后的图表进行直观对比。
+                  </p>
+                </div>
+              </div>
+
+              {/* ODV styled window container */}
+              <div style={{ position: 'relative', width: '940px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
+                
+                {/* Main Canvas Plot */}
+                <canvas
+                  ref={setUnfilteredCanvasElement}
+                  width={720}
+                  height={380}
+                  style={{
+                    position: 'absolute',
+                    left: '80px',
+                    top: '90px',
+                    width: '720px',
+                    height: '380px',
+                    border: `1px solid ${chartStyles.axisStroke || '#000'}`
+                  }}
+                />
+
+                {/* SVG Overlay */}
+                <svg
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    width: '940px',
+                    height: '540px',
+                    pointerEvents: 'none',
+                    zIndex: 2
+                  }}
+                >
+                  <defs>
+                    <linearGradient id="unfBathyGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#e2e8f0" />
+                      <stop offset="100%" stopColor="#94a3b8" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Bathymetry Shadow */}
+                  {unfilteredBathyPath && (
+                    <path
+                      d={unfilteredBathyPath}
+                      transform="translate(80, 90)"
+                      fill={chartStyles.bathyFill || 'url(#unfBathyGrad)'}
+                      stroke={chartStyles.bathyStroke || '#94a3b8'}
+                      strokeWidth={chartStyles.bathyStrokeWidth || 2}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+
+                  {/* Contours */}
+                  <g transform="translate(80, 90)">
+                    {unfilteredContourSvgPaths.map((path, idx) => (
+                      <path
+                        key={`unf-contour-${idx}`}
+                        d={path.path}
+                        fill="none"
+                        stroke={chartStyles.lineStroke || 'rgba(255,255,255,0.45)'}
+                        strokeWidth={chartStyles.lineWidth || 1.5}
+                      />
+                    ))}
+
+                    {/* Contour value labels (unfiltered) */}
+                    {showContourLabels && unfilteredContourSvgPaths.map((p: { path: string; value: number; labelX?: number; labelY?: number; angle?: number }, i: number) => {
+                      if (p.labelX === undefined || p.labelY === undefined || p.labelX === 0 || p.labelY === 0) return null;
+                      
+                      let shouldShow = true;
+                      if (contourLabelMode === 'multiplesOf10') {
+                        shouldShow = Math.round(p.value * 10) % 100 === 0;
+                      } else if (contourLabelMode === 'every2nd') {
+                        shouldShow = i % 2 === 0;
+                      }
+                      if (!shouldShow) return null;
+
+                      return (
+                        <g key={`unf-label-${i}`} transform={`translate(${p.labelX}, ${p.labelY}) rotate(${p.angle || 0})`}>
+                          <rect
+                            x={-14}
+                            y={-6}
+                            width={28}
+                            height={12}
+                            fill="#ffffff"
+                            opacity={0.85}
+                            rx={2}
+                            ry={2}
+                          />
+                          <text
+                            x={0}
+                            y={3}
+                            textAnchor="middle"
+                            fill={chartStyles.axisStroke === '#ffffff' ? '#000000' : (chartStyles.axisStroke || '#000')}
+                            style={{
+                              fontSize: '8px',
+                              fontFamily: chartStyles.fontFamily,
+                              fontWeight: 'bold'
+                            }}
+                          >
+                            {p.value}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </g>
+                  
+                  {/* Y-Axis Label and Ticks */}
+                  <g transform="translate(80, 90)">
+                    {(() => {
+                      const ticks = [];
+                      const start = Math.ceil(minDepthFilter / depthTickStep) * depthTickStep;
+                      for (let val = start; val <= maxDepthFilter; val += depthTickStep) {
+                        ticks.push(val);
+                      }
+                      if (ticks.length === 0) {
+                        return [0.0, 0.25, 0.5, 0.75, 1.0].map(r => {
+                          const val = minDepthFilter + (maxDepthFilter - minDepthFilter) * r;
+                          const yPos = r * 380;
+                          return { val, yPos };
+                        });
+                      }
+                      return ticks.map(val => {
+                        const r = (val - minDepthFilter) / (maxDepthFilter - minDepthFilter || 1);
+                        const yPos = r * 380;
+                        return { val, yPos };
+                      });
+                    })().map((tick, idx) => {
+                      return (
+                        <g key={`unf-y-tick-${idx}`}>
+                          <line x1={0} y1={tick.yPos} x2={chartStyles.tickDirection === 'inward' ? 5 : -5} y2={tick.yPos} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                          {chartStyles.closedBorderTicks && (
+                            <line x1={720} y1={tick.yPos} x2={chartStyles.tickDirection === 'inward' ? 715 : 725} y2={tick.yPos} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                          )}
+                          <text
+                            x={-10}
+                            y={tick.yPos + 4}
+                            textAnchor="end"
+                            fontFamily={textSettings.ticksLabels.fontFamily}
+                            fontSize={`${textSettings.ticksLabels.fontSize}px`}
+                            fill={textSettings.ticksLabels.color}
+                            fontWeight={textSettings.ticksLabels.fontWeight}
+                          >
+                            {tick.val.toFixed(0)}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </g>
+
+                  {/* X-Axis Ticks (Bottom) */}
+                  <g transform="translate(80, 90)">
+                    {unfilteredInterpolatedPoints.map((pt, idx) => (
+                      <g key={`unf-x-tick-${idx}`}>
+                        <line x1={pt.x} y1={380} x2={pt.x} y2={chartStyles.tickDirection === 'inward' ? 375 : 385} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                        {chartStyles.closedBorderTicks && (
+                          <line x1={pt.x} y1={0} x2={pt.x} y2={chartStyles.tickDirection === 'inward' ? 5 : -5} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                        )}
+                        <text
+                          x={pt.x}
+                          y={398}
+                          textAnchor="middle"
+                          transform={`rotate(${chartStyles.stationLabelAngle || -60}, ${pt.x}, 398)`}
+                          fontFamily={textSettings.ticksLabels.fontFamily}
+                          fontSize={`${textSettings.ticksLabels.fontSize}px`}
+                          fill={chartStyles.stationLabelColor || textSettings.ticksLabels.color}
+                          fontWeight={textSettings.ticksLabels.fontWeight}
+                        >
+                          {pt.name}
+                        </text>
+                      </g>
+                    ))}
+                  </g>
+
+                  {/* Top Station Indicators */}
+                  {chartStyles.showTopStationLabels && (
+                    <g transform="translate(80, 90)">
+                      {unfilteredTopStationTicks.map((tick, idx) => (
+                        <g key={`unf-top-tick-${idx}`}>
+                          <line x1={tick.cx} y1={0} x2={tick.cx} y2={-5} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                          <text
+                            x={tick.cx}
+                            y={-10}
+                            textAnchor="middle"
+                            fontFamily={textSettings.ticksLabels.fontFamily}
+                            fontSize="8px"
+                            fill="#64748b"
+                          >
+                            {tick.name}
+                          </text>
+                        </g>
+                      ))}
+                    </g>
+                  )}
+
+                  {/* Colorbar */}
+                  <g transform="translate(830, 90)">
+                    <rect x={0} y={0} width={chartStyles.colorbarWidth || 15} height={380} fill="none" stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                    {/* Draw discrete color blocks if discrete banding enabled */}
+                    {(() => {
+                      const blocksCount = 50;
+                      const blockHeight = 380 / blocksCount;
+                      const paletteColors = colorsMap[chartStyles.colormap || 'odv'];
+                      const scale = scaleLinear<string>()
+                        .domain([
+                          docMin, 
+                          docMin + (docMax - docMin) * 0.25, 
+                          docMin + (docMax - docMin) * 0.5, 
+                          docMin + (docMax - docMin) * 0.75, 
+                          docMax
+                        ])
+                        .range(paletteColors)
+                        .clamp(true);
+
+                      return Array.from({ length: blocksCount }).map((_, i) => {
+                        const ratio = i / (blocksCount - 1);
+                        let val = docMin + (1 - ratio) * (docMax - docMin);
+                        if (chartStyles.colorBanding === 'discrete') {
+                          const stepsCount = Math.floor((val - docMin) / contourStep);
+                          val = docMin + stepsCount * contourStep + contourStep / 2;
+                        }
+                        const fill = scale(val);
+                        return (
+                          <rect
+                            key={`unf-cb-${i}`}
+                            x={0}
+                            y={i * blockHeight}
+                            width={chartStyles.colorbarWidth || 15}
+                            height={blockHeight + 0.5}
+                            fill={fill}
+                            stroke="none"
+                          />
+                        );
+                      });
+                    })()}
+
+                    {/* Colorbar Ticks and Labels */}
+                    {(() => {
+                      const ticks = [];
+                      for (let t = docMin; t <= docMax; t += contourStep) {
+                        ticks.push(t);
+                      }
+                      return ticks.map((val, idx) => {
+                        const ratio = (val - docMin) / (docMax - docMin || 1);
+                        const yPos = 380 - ratio * 380;
+                        return (
+                          <g key={`unf-cb-tick-${idx}`}>
+                            <line x1={chartStyles.colorbarWidth || 15} y1={yPos} x2={(chartStyles.colorbarWidth || 15) + 5} y2={yPos} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
+                            <text
+                              x={(chartStyles.colorbarWidth || 15) + 8}
+                              y={yPos + 3}
+                              textAnchor="start"
+                              fontFamily={textSettings.colorbarTitle.fontFamily}
+                              fontSize="8.5px"
+                              fill="#334155"
+                              fontWeight="600"
+                            >
+                              {val.toFixed(1)}
+                            </text>
+                          </g>
+                        );
+                      });
+                    })()}
+                  </g>
+
+                  {/* Data Points */}
+                  {chartStyles.showPoints2D && unfilteredContourDataPoints.map((dot, idx) => {
+                    const isDotRejected = dot.isRejected;
+                    const size = isDotRejected ? 8 : (chartStyles.pointRadius2D || 4);
+                    const fill = isDotRejected ? '#ef4444' : (chartStyles.pointFill2D || '#000');
+                    const stroke = isDotRejected ? '#ffffff' : (chartStyles.pointStroke2D || '#fff');
+                    const strokeWidth = isDotRejected ? 1.5 : (chartStyles.pointStrokeWidth2D || 0.75);
+
+                    if (isDotRejected) {
+                      return (
+                        <rect
+                          key={`unf-dot-${idx}`}
+                          x={80 + dot.cx - size/2}
+                          y={90 + dot.cy - size/2}
+                          width={size}
+                          height={size}
+                          fill={fill}
+                          stroke={stroke}
+                          strokeWidth={strokeWidth}
+                          style={{ pointerEvents: 'none' }}
+                        />
+                      );
+                    }
+                    return (
+                      <circle
+                        key={`unf-dot-${idx}`}
+                        cx={80 + dot.cx}
+                        cy={90 + dot.cy}
+                        r={size}
+                        fill={fill}
+                        stroke={stroke}
+                        strokeWidth={strokeWidth}
+                        style={{ pointerEvents: 'none' }}
+                      />
+                    );
+                  })}
+                </svg>
+              </div>
+              <div style={{ display: 'flex', gap: '20px', marginTop: '16px', fontSize: '11px', color: '#dc2626', flexWrap: 'wrap', justifyContent: 'center', fontWeight: 600 }}>
+                <span>※ 横轴：{contourXAxis === 'station' ? '测站序号' : contourXAxis === 'longitude' ? '经度' : '纬度'}</span>
+                <span>※ 纵轴：海水标定深度 (米)</span>
+                <span>● 黑色圆点：实际采样点 | 🟥 红色方点：已废弃采样点</span>
+                <span>■ 灰色阴影：海底地形 (海床)</span>
+              </div>
+            </div>
+          )}
+
           <StationMap
               stations={mapStations}
               selectedStation={selectedStation}
@@ -4699,6 +6100,50 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               </button>
             </div>
           </div>
+        </div>
+      )}
+      
+      {hoveredPoint2D && (
+        <div
+          style={{
+            position: 'absolute',
+            left: `${hoveredPoint2D.x}px`,
+            top: `${hoveredPoint2D.y}px`,
+            transform: 'translate(-50%, -100%)',
+            pointerEvents: 'none',
+            zIndex: 1000,
+            background: 'rgba(15, 23, 42, 0.95)',
+            color: '#ffffff',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '11px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '2px',
+            lineHeight: '1.4',
+            whiteSpace: 'nowrap',
+            fontFamily: 'system-ui, sans-serif'
+          }}
+        >
+          <div style={{ fontWeight: 'bold', borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: '2px', marginBottom: '2px', color: '#38bdf8' }}>
+            测站: {hoveredPoint2D.station}
+          </div>
+          <div>深度: {hoveredPoint2D.depth} m</div>
+          <div>浓度: <strong style={{ color: '#fbbf24' }}>{hoveredPoint2D.concentration.toFixed(2)}</strong> {isHydroMode ? (selectedHydroParam.includes(' ') ? selectedHydroParam.split(' ')[1] : '') : 'µmol/L'}</div>
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '-4px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '0',
+              height: '0',
+              borderLeft: '4px solid transparent',
+              borderRight: '4px solid transparent',
+              borderTop: '4px solid rgba(15, 23, 42, 0.95)'
+            }}
+          />
         </div>
       )}
     </div>
