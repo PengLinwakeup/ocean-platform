@@ -1465,7 +1465,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         }
       } else {
         const span = dragInfo.startMax - dragInfo.startMin;
-        const pixelsPerUnit = 720 / span; // X-axis width is 720px
+        const pixelsPerUnit = 700 / span; // X-axis width is 700px
         const deltaUnits = deltaX / pixelsPerUnit;
 
         if (dragInfo.type === 'pan') {
@@ -1667,9 +1667,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       // Embed canvas raster background as SVG Image element
       const rasterDataUrl = canvas.toDataURL('image/png');
       const svgImage = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-      svgImage.setAttribute('x', '80');
+      svgImage.setAttribute('x', '100');
       svgImage.setAttribute('y', '90');
-      svgImage.setAttribute('width', '720');
+      svgImage.setAttribute('width', '700');
       svgImage.setAttribute('height', '380');
       svgImage.setAttribute('href', rasterDataUrl);
       svgImage.setAttribute('clip-path', `url(#plot-area-clip-${instanceId})`);
@@ -1708,8 +1708,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
-    // Draw background raster canvas exactly where it sits in the preview (left:80px, top:90px, size: 720x380)
-    ctx.drawImage(canvas, 80, 90, 720, 380);
+    // Draw background raster canvas exactly where it sits in the preview (left:100px, top:90px, size: 700x380)
+    ctx.drawImage(canvas, 100, 90, 700, 380);
 
     const clone = svg.cloneNode(true) as SVGSVGElement;
     clone.setAttribute('width', width.toString());
@@ -1885,7 +1885,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       for (let i = 0; i < activeStations2D.length; i += step) {
         const ratio = Math.max(0, Math.min(1, i / (activeStations2D.length - 1 || 1)));
         labelsList.push({
-          x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
+          x: (invertXAxis2D ? (1 - ratio) : ratio) * 700,
           y: 0,
           name: formatStationLabel(activeStations2D[i]!)
         });
@@ -1895,7 +1895,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         const ratio = Math.max(0, Math.min(1, i / (ticksCount - 1)));
         const val = minX + ratio * xSpan;
         labelsList.push({
-          x: (invertXAxis2D ? (1 - ratio) : ratio) * 720,
+          x: (invertXAxis2D ? (1 - ratio) : ratio) * 700,
           y: 0,
           name: contourXAxis === 'longitude' ? formatLongitude(val) : formatLatitude(val)
         });
@@ -1904,14 +1904,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     const sampleDots = filteredSamples.map(s => {
       const xVal = getXValue(s);
-      const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
+      const cx = Math.max(0, Math.min(700, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 700 : ((xVal - minX) / xSpan) * 700));
       const cy = ((s.depth! - minY) / ySpan) * 380;
       return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan, station: s.station, depth: s.depth };
     });
 
     const ticks = activeStations2D.map(st => {
       const xVal = stationJitteredCoords2D[st] || 0;
-      const cx = Math.max(0, Math.min(720, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 720 : ((xVal - minX) / xSpan) * 720));
+      const cx = Math.max(0, Math.min(700, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 700 : ((xVal - minX) / xSpan) * 700));
       return { name: formatStationLabel(st) || '', cx };
     });
 
@@ -2613,7 +2613,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   // Calculate adaptive axis and legend title variables
   const maxDepthLabelLength = Math.max(...[0.0, 0.25, 0.5, 0.75, 1.0].map(r => (minDepthFilter + (maxDepthFilter - minDepthFilter) * r).toFixed(0).length));
   const estimatedYTickWidth = maxDepthLabelLength * (textSettings.ticksLabels.fontSize || 8.5) * 0.6;
-  const autoYAxisTitleX = Math.max(10, 70 - estimatedYTickWidth - 12);
+  const autoYAxisTitleX = Math.max(15, 110 - estimatedYTickWidth - 12);
   const yAxisTitleX = autoYAxisTitleX - (chartStyles.yAxisTitleOffset || 0);
 
   const autoXAxisTitleY = 488 + (textSettings.ticksLabels.fontSize || 8.5) + 18;
@@ -3159,6 +3159,20 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             {settingsTab1D === 'style' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <h4 style={{ fontSize: '12px', fontWeight: 'bold', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: '4px 0', color: '#0f172a' }}>1D 剖面图学术样式</h4>
+
+                {/* Font Family selector for 1D */}
+                 <div className="input-group">
+                   <label className="input-label" style={{ fontSize: '10px' }}>图表字体风格</label>
+                   <select className="input-field" style={{ fontSize: '11px' }} value={chartStyles.fontFamily} onChange={e => {
+                     const font = e.target.value;
+                     setChartStyles(prev => ({ ...prev, fontFamily: font }));
+                   }}>
+                     <option value="'Times New Roman', Times, serif">Times New Roman (衬线)</option>
+                     <option value="Arial, Helvetica, sans-serif">Arial (无衬线)</option>
+                     <option value="Helvetica, sans-serif">Helvetica</option>
+                     <option value="'Courier New', monospace">Courier New</option>
+                   </select>
+                 </div>
 
                 <div className="grid-2" style={{ gap: '8px' }}>
                   <div className="input-group" style={{ marginBottom: 0 }}>
@@ -5005,7 +5019,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                      </div>
 
                       {/* Title Offset sliders */}
-                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ borderTop: '1px solid #border-color', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>文字标题位置微调 (自适应基础)</label>
                         
                         <div className="input-group">
@@ -5073,8 +5087,85 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                         </div>
                       </div>
 
+                      {/* Axis Fonts settings */}
+                      <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>轴与刻度文字设置 (可双击图形微调)</label>
+                        
+                        <div className="grid-2" style={{ gap: '8px' }}>
+                          <div className="input-group" style={{ marginBottom: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                              <span>纵轴(Depth)字号: {textSettings.yAxisLabel.fontSize}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="8"
+                              max="24"
+                              step="0.5"
+                              value={textSettings.yAxisLabel.fontSize}
+                              onChange={e => setTextSettings(prev => ({
+                                ...prev,
+                                yAxisLabel: { ...prev.yAxisLabel, fontSize: parseFloat(e.target.value) }
+                              }))}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+
+                          <div className="input-group" style={{ marginBottom: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#475569', marginBottom: '2px' }}>
+                              <span>刻度数字字号: {textSettings.ticksLabels.fontSize}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="6"
+                              max="18"
+                              step="0.5"
+                              value={textSettings.ticksLabels.fontSize}
+                              onChange={e => setTextSettings(prev => ({
+                                ...prev,
+                                ticksLabels: { ...prev.ticksLabels, fontSize: parseFloat(e.target.value) }
+                              }))}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid-2" style={{ gap: '8px', marginTop: '4px' }}>
+                          <div className="input-group" style={{ marginBottom: 0 }}>
+                            <label className="input-label" style={{ fontSize: '10px' }}>纵轴标题粗细</label>
+                            <select
+                              className="input-field"
+                              style={{ padding: '4px', fontSize: '11px' }}
+                              value={textSettings.yAxisLabel.fontWeight}
+                              onChange={e => setTextSettings(prev => ({
+                                ...prev,
+                                yAxisLabel: { ...prev.yAxisLabel, fontWeight: e.target.value as any }
+                              }))}
+                            >
+                              <option value="normal">正常 (Normal)</option>
+                              <option value="bold">加粗 (Bold)</option>
+                            </select>
+                          </div>
+                          
+                          <div className="input-group" style={{ marginBottom: 0 }}>
+                            <label className="input-label" style={{ fontSize: '10px' }}>刻度数字粗细</label>
+                            <select
+                              className="input-field"
+                              style={{ padding: '4px', fontSize: '11px' }}
+                              value={textSettings.ticksLabels.fontWeight}
+                              onChange={e => setTextSettings(prev => ({
+                                ...prev,
+                                ticksLabels: { ...prev.ticksLabels, fontWeight: e.target.value as any }
+                              }))}
+                            >
+                              <option value="normal">正常 (Normal)</option>
+                              <option value="bold">加粗 (Bold)</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
                      {/* Color Adjusters */}
-                     <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                     <div style={{ borderTop: '1px solid #border-color', paddingTop: '10px' }}>
                        <label className="input-label" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>线框网格配色微调</label>
                        <div className="grid-3" style={{ gap: '8px', marginTop: '6px' }}>
                          <div>
@@ -5173,12 +5264,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             {/* ODV styled window container */}
             <div style={{ position: 'relative', width: '940px', height: '580px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
               
-              {/* Main Canvas Plot (starting at left 80px, top 90px) */}
+              {/* Main Canvas Plot (starting at left 100px, top 90px) */}
               <canvas
                 ref={setCanvasElement}
-                width={720}
+                width={700}
                 height={380}
-                style={{ position: 'absolute', top: '90px', left: '80px', width: '720px', height: '380px', zIndex: 1, border: `1px solid ${chartStyles.axisStroke}` }}
+                style={{ position: 'absolute', top: '90px', left: '100px', width: '700px', height: '380px', zIndex: 1, border: `1px solid ${chartStyles.axisStroke}` }}
               />
 
               {/* SVG overlay (starts at 0, 0 and covers the labels area too) */}
@@ -5190,7 +5281,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 {/* Clipping path definition to keep contours within the black border */}
                 <defs>
                   <clipPath id={`plot-area-clip-${instanceId}`}>
-                    <rect x={80} y={90} width={720} height={380} />
+                    <rect x={100} y={90} width={700} height={380} />
                   </clipPath>
                   <linearGradient id="bathyGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#1e293b" stopOpacity="0.85" />
@@ -5216,7 +5307,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       <path
                         key={i}
                         d={p.path}
-                        transform="translate(80, 90)"
+                        transform="translate(100, 90)"
                         fill="none"
                         stroke={chartStyles.lineStroke}
                         strokeWidth={chartStyles.lineWidth}
@@ -5237,7 +5328,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                     if (!shouldShow) return null;
 
                     return (
-                      <g key={`label-${i}`} transform={`translate(${p.labelX + 80}, ${p.labelY + 90}) rotate(${p.angle || 0})`}>
+                      <g key={`label-${i}`} transform={`translate(${p.labelX + 100}, ${p.labelY + 90}) rotate(${p.angle || 0})`}>
                         <rect
                           x={-14}
                           y={-6}
@@ -5269,7 +5360,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   {bathyPath && (
                     <path
                       d={bathyPath}
-                      transform="translate(80, 90)"
+                      transform="translate(100, 90)"
                       fill={chartStyles.bathyFill}
                       stroke={chartStyles.bathyStroke}
                       strokeWidth={chartStyles.bathyStrokeWidth}
@@ -5280,7 +5371,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   {(chartStyles.showPoints2D ?? true) && contourDataPoints.map((pt: any, i) => (
                     <circle
                       key={i}
-                      cx={pt.cx + 80}
+                      cx={pt.cx + 100}
                       cy={pt.cy + 90}
                       r={chartStyles.pointRadius2D ?? chartStyles.pointRadius ?? 4}
                       fill={chartStyles.pointFill2D ?? chartStyles.pointFill ?? '#000000'}
@@ -5308,7 +5399,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </g>
 
                 {/* ODV Border Outline */}
-                <rect x={80} y={90} width={720} height={380} fill="none" stroke={chartStyles.axisStroke} strokeWidth="1" />
+                <rect x={100} y={90} width={700} height={380} fill="none" stroke={chartStyles.axisStroke} strokeWidth="1" />
 
                 {/* Left Y-Axis Title (Depth [m]) */}
                 <text
@@ -5351,12 +5442,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   });
                 })().map((tick, i) => {
                   const isOutward = chartStyles.tickDirection === 'outward';
-                  const tickX = isOutward ? 75 : 85;
+                  const tickX = isOutward ? 95 : 105;
 
                   return (
                     <g key={i}>
                       {/* Left border tick */}
-                      <line x1={tickX} y1={tick.yPos} x2={80} y2={tick.yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
+                      <line x1={tickX} y1={tick.yPos} x2={100} y2={tick.yPos} stroke={chartStyles.axisStroke} strokeWidth="1" />
                       
                       {/* Optional Right border tick (Closed Box symmetry) */}
                       {chartStyles.closedBorderTicks && (
@@ -5364,7 +5455,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       )}
                       
                       <text
-                        x={70}
+                        x={90}
                         y={tick.yPos + 4}
                         fill={textSettings.ticksLabels.color}
                         style={{
@@ -5386,7 +5477,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
                 {/* Bottom X-Axis Title */}
                 <text
-                  x={420}
+                  x={450}
                   y={xAxisTitleY}
                   fill={textSettings.xAxisLabel.color}
                   style={{
@@ -5405,7 +5496,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
                 {/* Bottom X-Axis Ticks & Labels */}
                 {interpolatedPoints.map((pt: { x: number; y: number; name: string }, i: number) => {
-                  const xPos = pt.x + 80;
+                  const xPos = pt.x + 100;
                   const isOutward = chartStyles.tickDirection === 'outward';
                   const tickY = isOutward ? 475 : 465;
 
@@ -5427,6 +5518,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                           pointerEvents: 'auto'
                         }}
                         textAnchor="middle"
+                        transform={`rotate(${chartStyles.stationLabelAngle || 0}, ${xPos}, 488)`}
                         onDoubleClick={(e) => handleTextDoubleClick('ticksLabels', e)}
                       >
                         {pt.name}
@@ -5446,8 +5538,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   ]);
 
                   return sortedTicks.map((tick, i) => {
-                    const xPos = tick.cx + 80;
-                    if (xPos < 80 || xPos > 800) return null;
+                    const xPos = tick.cx + 100;
+                    if (xPos < 100 || xPos > 800) return null;
 
                     const isOutward = chartStyles.tickDirection === 'outward';
                     const tickY = isOutward ? 86 : 94;
@@ -5604,9 +5696,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 {/* ================= INTERACTION GATES: INVISIBLE AXIS DRAG PANELS ================= */}
                 {/* Y-Axis Pan Rectangle (middle 80% range) */}
                 <rect
-                  x={20}
+                  x={10}
                   y={130}
-                  width={65}
+                  width={90}
                   height={300}
                   fill="transparent"
                   cursor="grab"
@@ -5617,9 +5709,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </rect>
                 {/* Y-Axis Scale Min Rectangle (top 10%) */}
                 <rect
-                  x={20}
+                  x={10}
                   y={90}
-                  width={65}
+                  width={90}
                   height={40}
                   fill="transparent"
                   cursor="ns-resize"
@@ -5630,9 +5722,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </rect>
                 {/* Y-Axis Scale Max Rectangle (bottom 10%) */}
                 <rect
-                  x={20}
+                  x={10}
                   y={430}
-                  width={65}
+                  width={90}
                   height={40}
                   fill="transparent"
                   cursor="ns-resize"
@@ -5644,9 +5736,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
                 {/* X-Axis Pan Rectangle (middle 80% range) */}
                 <rect
-                  x={152}
+                  x={170}
                   y={470}
-                  width={576}
+                  width={560}
                   height={40}
                   fill="transparent"
                   cursor="grab"
@@ -5657,9 +5749,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </rect>
                 {/* X-Axis Scale Min Rectangle (left 10%) */}
                 <rect
-                  x={80}
+                  x={100}
                   y={470}
-                  width={72}
+                  width={70}
                   height={40}
                   fill="transparent"
                   cursor="ew-resize"
@@ -5670,9 +5762,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </rect>
                 {/* X-Axis Scale Max Rectangle (right 10%) */}
                 <rect
-                  x={728}
+                  x={730}
                   y={470}
-                  width={72}
+                  width={70}
                   height={40}
                   fill="transparent"
                   cursor="ew-resize"
@@ -5728,13 +5820,13 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 {/* Main Canvas Plot */}
                 <canvas
                   ref={setUnfilteredCanvasElement}
-                  width={720}
+                  width={700}
                   height={380}
                   style={{
                     position: 'absolute',
-                    left: '80px',
+                    left: '100px',
                     top: '90px',
-                    width: '720px',
+                    width: '700px',
                     height: '380px',
                     border: `1px solid ${chartStyles.axisStroke || '#000'}`
                   }}
@@ -5765,7 +5857,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   {unfilteredBathyPath && (
                     <path
                       d={unfilteredBathyPath}
-                      transform="translate(80, 90)"
+                      transform="translate(100, 90)"
                       fill={chartStyles.bathyFill || 'url(#unfBathyGrad)'}
                       stroke={chartStyles.bathyStroke || '#94a3b8'}
                       strokeWidth={chartStyles.bathyStrokeWidth || 2}
@@ -5774,7 +5866,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   )}
 
                   {/* Contours */}
-                  <g transform="translate(80, 90)">
+                  <g transform="translate(100, 90)">
                     {unfilteredContourSvgPaths.map((path, idx) => (
                       <path
                         key={`unf-contour-${idx}`}
@@ -5871,7 +5963,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   </g>
 
                   {/* X-Axis Ticks (Bottom) */}
-                  <g transform="translate(80, 90)">
+                  <g transform="translate(100, 90)">
                     {unfilteredInterpolatedPoints.map((pt, idx) => (
                       <g key={`unf-x-tick-${idx}`}>
                         <line x1={pt.x} y1={380} x2={pt.x} y2={chartStyles.tickDirection === 'inward' ? 375 : 385} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
@@ -5896,7 +5988,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
                   {/* Top Station Indicators */}
                   {chartStyles.showTopStationLabels && (
-                    <g transform="translate(80, 90)">
+                    <g transform="translate(100, 90)">
                       {unfilteredTopStationTicks.map((tick, idx) => (
                         <g key={`unf-top-tick-${idx}`}>
                           <line x1={tick.cx} y1={0} x2={tick.cx} y2={-5} stroke={chartStyles.axisStroke || '#000'} strokeWidth={1} />
@@ -5997,7 +6089,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       return (
                         <rect
                           key={`unf-dot-${idx}`}
-                          x={80 + dot.cx - size/2}
+                          x={100 + dot.cx - size/2}
                           y={90 + dot.cy - size/2}
                           width={size}
                           height={size}
@@ -6011,7 +6103,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                     return (
                       <circle
                         key={`unf-dot-${idx}`}
-                        cx={80 + dot.cx}
+                        cx={100 + dot.cx}
                         cy={90 + dot.cy}
                         r={size}
                         fill={fill}
