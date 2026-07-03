@@ -353,6 +353,7 @@ function getParameterRanges(paramName: string, values: number[]): { min: number;
 }
 
 export default function OriginPlotter({ processedSamples: originalProcessedSamples, stationCoords, hydroSamples, hydroParameters }: OriginPlotterProps) {
+  const instanceId = useMemo(() => Math.random().toString(36).substring(2, 9), []);
   const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>(() => loadSavedState<'profile1d' | 'contour2d'>('ocean_visSubTab', 'profile1d'));
 
   const isHydroMode = !!(hydroSamples && hydroSamples.length > 0);
@@ -1651,7 +1652,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     if (!svg) return;
 
     const width = 940;
-    const height = 540;
+    const height = 580;
     const scale = 3;
 
     if (format === 'svg') {
@@ -1671,7 +1672,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       svgImage.setAttribute('width', '720');
       svgImage.setAttribute('height', '380');
       svgImage.setAttribute('href', rasterDataUrl);
-      svgImage.setAttribute('clip-path', 'url(#plot-area-clip)');
+      svgImage.setAttribute('clip-path', `url(#plot-area-clip-${instanceId})`);
 
       // Insert background raster image at the bottom of the SVG groups
       const firstChild = clone.firstChild;
@@ -5170,7 +5171,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             </div>
 
             {/* ODV styled window container */}
-            <div style={{ position: 'relative', width: '940px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
+            <div style={{ position: 'relative', width: '940px', height: '580px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
               
               {/* Main Canvas Plot (starting at left 80px, top 90px) */}
               <canvas
@@ -5183,12 +5184,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               {/* SVG overlay (starts at 0, 0 and covers the labels area too) */}
               <svg
                 width={940}
-                height={540}
-                style={{ position: 'absolute', top: 0, left: 0, width: '940px', height: '540px', zIndex: 2, pointerEvents: 'none' }}
+                height={580}
+                style={{ position: 'absolute', top: 0, left: 0, width: '940px', height: '580px', zIndex: 2, pointerEvents: 'none' }}
               >
                 {/* Clipping path definition to keep contours within the black border */}
                 <defs>
-                  <clipPath id="plot-area-clip">
+                  <clipPath id={`plot-area-clip-${instanceId}`}>
                     <rect x={80} y={90} width={720} height={380} />
                   </clipPath>
                   <linearGradient id="bathyGrad" x1="0" y1="0" x2="0" y2="1">
@@ -5209,7 +5210,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 </defs>
 
                 {/* Contour lines (clipped to canvas box) */}
-                <g clipPath="url(#plot-area-clip)">
+                <g clipPath={`url(#plot-area-clip-${instanceId})`}>
                   {contourSvgPaths.map((p: { path: string; value: number }, i: number) => {
                     return (
                       <path
@@ -5722,7 +5723,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
               </div>
 
               {/* ODV styled window container */}
-              <div style={{ position: 'relative', width: '940px', height: '540px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
+              <div style={{ position: 'relative', width: '940px', height: '580px', backgroundColor: '#ffffff', userSelect: 'none', marginTop: '10px' }}>
                 
                 {/* Main Canvas Plot */}
                 <canvas
@@ -5741,12 +5742,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
                 {/* SVG Overlay */}
                 <svg
+                  width={940}
+                  height={580}
                   style={{
                     position: 'absolute',
                     left: 0,
                     top: 0,
                     width: '940px',
-                    height: '540px',
+                    height: '580px',
                     pointerEvents: 'none',
                     zIndex: 2
                   }}
