@@ -5518,7 +5518,6 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                           pointerEvents: 'auto'
                         }}
                         textAnchor="middle"
-                        transform={`rotate(${chartStyles.stationLabelAngle || 0}, ${xPos}, 488)`}
                         onDoubleClick={(e) => handleTextDoubleClick('ticksLabels', e)}
                       >
                         {pt.name}
