@@ -9,10 +9,15 @@ import { ExcelSampleInfo, HydrologicalSample } from '../types';
  */
 export function normalizeStationName(name: string | null | undefined): string {
   if (!name) return '';
-  return name
-    .toString()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, ''); // Remove non-alphanumeric chars
+  const clean = name.toString().toLowerCase().trim();
+  
+  // Extract trailing digits/numbers ignoring leading zeros
+  const match = clean.match(/(?:station|ctd|st|s|^)[-_:\s]*0*(\d+)/i);
+  if (match && match[1]) {
+    return 'st' + match[1];
+  }
+  
+  return clean.replace(/[^a-z0-9]/g, ''); // Remove non-alphanumeric chars
 }
 
 /**

@@ -209,3 +209,72 @@ export function interpolateIDW(
   
   return totalWeight === 0 ? 0 : weightedSum / totalWeight;
 }
+
+/**
+ * Calculates potential density anomaly (sigma-theta, approximation) in kg/m3.
+ * Uses the UNESCO EOS-80 equation of state for seawater at 1 atm (0 dbar pressure).
+ */
+export function calculatePotentialDensityAnomaly(S: number, T: number): number {
+  // S: salinity (psu), T: temperature (°C)
+  // Pure water density
+  const rhow = 999.842594 +
+    6.793952e-2 * T -
+    9.095290e-3 * Math.pow(T, 2) +
+    1.001685e-4 * Math.pow(T, 3) -
+    1.120083e-6 * Math.pow(T, 4) +
+    6.536332e-9 * Math.pow(T, 5);
+
+  const A = 0.824493 -
+    4.0899e-3 * T +
+    7.6438e-5 * Math.pow(T, 2) -
+    8.2467e-7 * Math.pow(T, 3) +
+    5.3875e-9 * Math.pow(T, 4);
+
+  const B = -5.72466e-3 +
+    1.0227e-4 * T -
+    1.6546e-6 * Math.pow(T, 2);
+
+  const C = 4.8314e-4;
+
+  const density = rhow + A * S + B * Math.pow(S, 1.5) + C * Math.pow(S, 2);
+  return density - 1000;
+}
+
+/**
+ * Calculates oxygen saturation in umol/kg using Garcia & Gordon (1992) equation.
+ */
+export function calculateOxygenSaturation(S: number, T: number): number {
+  // S: salinity (psu), T: temperature (°C)
+  const Tk = T + 273.15;
+  const Ts = Math.log((298.15 - T) / Tk);
+
+  const A0 = 5.80871;
+  const A1 = 3.20291;
+  const A2 = 4.17887;
+  const A3 = 5.10203;
+  const A4 = -0.06606;
+  const A5 = 2.44536;
+
+  const B0 = -0.00701577;
+  const B1 = -0.00770028;
+  const B2 = -0.0113864;
+  const B3 = -0.00951619;
+
+  const C0 = -0.000000098;
+
+  const lnO2Sat = A0 + A1 * Ts + A2 * Math.pow(Ts, 2) + A3 * Math.pow(Ts, 3) + A4 * Math.pow(Ts, 4) + A5 * Math.pow(Ts, 5) +
+    S * (B0 + B1 * Ts + B2 * Math.pow(Ts, 2) + B3 * Math.pow(Ts, 3)) +
+    C0 * Math.pow(S, 2);
+
+  return Math.exp(lnO2Sat);
+}
+
+/**
+ * Calculates Apparent Oxygen Utilization (AOU) in umol/kg.
+ */
+export function calculateAOU(S: number, T: number, O2Obs: number): number {
+  const sat = calculateOxygenSaturation(S, T);
+  const aou = sat - O2Obs;
+  return aou;
+}
+

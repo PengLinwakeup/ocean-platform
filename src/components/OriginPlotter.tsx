@@ -5,13 +5,13 @@ import {
 } from 'lucide-react';
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
-  CartesianGrid, Tooltip, ErrorBar
+  CartesianGrid, Tooltip, ErrorBar, Legend
 } from 'recharts';
 import { contours } from 'd3-contour';
 import { scaleLinear } from 'd3-scale';
 import { curveCardinal } from 'd3-shape';
 import { normalizeStationName } from '../utils/stationParser';
-import { interpolateIDW } from '../utils/calc';
+import { interpolateIDW, calculatePotentialDensityAnomaly, calculateAOU, fitCalibrationCurve } from '../utils/calc';
 import { ExcelSampleInfo, HydrologicalSample } from '../types';
 import { StationMap } from './StationMap';
 
@@ -354,7 +354,50 @@ function getParameterRanges(paramName: string, values: number[]): { min: number;
 
 export default function OriginPlotter({ processedSamples: originalProcessedSamples, stationCoords, hydroSamples, hydroParameters }: OriginPlotterProps) {
   const instanceId = useMemo(() => Math.random().toString(36).substring(2, 9), []);
-  const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d'>(() => loadSavedState<'profile1d' | 'contour2d'>('ocean_visSubTab', 'profile1d'));
+  const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot'>(() => loadSavedState<'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot'>('ocean_visSubTab', 'profile1d'));
+  const [showDensityOverlay, setShowDensityOverlay] = useState<boolean>(() => loadSavedState<boolean>('ocean_showDensityOverlay', false));
+
+  useEffect(() => {
+    localStorage.setItem('ocean_visSubTab', JSON.stringify(visSubTab));
+  }, [visSubTab]);
+
+  useEffect(() => {
+    localStorage.setItem('ocean_showDensityOverlay', JSON.stringify(showDensityOverlay));
+  }, [showDensityOverlay]);
+
+  // Utility to find values in values record by keyword matching
+  const findValueByKeywords = (values: Record<string, number>, keywords: string[]): number | undefined => {
+    const keys = Object.keys(values);
+    for (const keyword of keywords) {
+      const matchedKey = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(keyword));
+      if (matchedKey && values[matchedKey] !== undefined) {
+        return values[matchedKey];
+      }
+    }
+    return undefined;
+  };
+
+  // Helper to map station + depth to closest hydro profile sample
+  const findHydroDataForSample = useMemo(() => {
+    return (st: string | null, depth: number | null) => {
+      if (!st || depth === null || !hydroSamples || hydroSamples.length === 0) return null;
+      const normSt = normalizeStationName(st);
+      const stationHydro = hydroSamples.filter(h => normalizeStationName(h.station) === normSt);
+      if (stationHydro.length === 0) return null;
+
+      let closest = stationHydro[0];
+      let minDiff = Math.abs(closest.depth - depth);
+      for (const h of stationHydro) {
+        const diff = Math.abs(h.depth - depth);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = h;
+        }
+      }
+      return closest;
+    };
+  }, [hydroSamples]);
+
 
   const isHydroMode = !!(hydroSamples && hydroSamples.length > 0);
 
@@ -457,7 +500,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     id: string;
     name: string;
     timestamp: string;
-    visSubTab: 'profile1d' | 'contour2d';
+    visSubTab: 'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot';
     docMin: number;
     docMax: number;
     contourStep: number;
@@ -879,6 +922,104 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       };
     });
   }, [contourXAxis, mapStations]);
+
+  const densityContoursTS = useMemo(() => {
+    const targets = [24.0, 24.5, 25.0, 25.5, 26.0, 26.5, 26.8, 27.0, 27.2, 27.4, 27.6, 27.8, 28.0];
+    const sMin = 32.5;
+    const sMax = 37.0;
+    const steps = 25;
+    
+    // Bisection solver to find T given S and target density anomaly sigma
+    const solveTemp = (S: number, targetSigma: number): number => {
+      let low = -2.0;
+      let high = 35.0;
+      for (let iter = 0; iter < 15; iter++) {
+        const mid = (low + high) / 2;
+        const sigma = calculatePotentialDensityAnomaly(S, mid);
+        if (sigma > targetSigma) {
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+      return (low + high) / 2;
+    };
+
+    return targets.map(sigma => {
+      const points = [];
+      for (let i = 0; i <= steps; i++) {
+        const S = sMin + (i / steps) * (sMax - sMin);
+        const T = solveTemp(S, sigma);
+        points.push({ salinity: S, temperature: T, sigma });
+      }
+      return { sigma, points };
+    });
+  }, []);
+
+  const tsData = useMemo(() => {
+    if (!hydroSamples || hydroSamples.length === 0) return [];
+    return hydroSamples.map(h => {
+      const sal = findValueByKeywords(h.values, ['salinity', 'sal']);
+      const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c']);
+      if (sal === undefined || temp === undefined || isNaN(sal) || isNaN(temp)) return null;
+      
+      let depthGroup = 'Deep (>1000m)';
+      if (h.depth < 200) depthGroup = 'Upper (<200m)';
+      else if (h.depth <= 1000) depthGroup = 'Intermediate (200-1000m)';
+
+      return {
+        station: h.station,
+        depth: h.depth,
+        salinity: parseFloat(sal.toFixed(3)),
+        temperature: parseFloat(temp.toFixed(3)),
+        depthGroup
+      };
+    }).filter(Boolean) as { station: string; depth: number; salinity: number; temperature: number; depthGroup: string }[];
+  }, [hydroSamples]);
+
+  const aouDocData = useMemo(() => {
+    const valid = originalProcessedSamples.filter(s => s.station && s.depth !== null && !s.isRejected && !s.isStd && !s.isBlank);
+    return valid.map(s => {
+      const closest = findHydroDataForSample(s.station, s.depth);
+      if (!closest) return null;
+      const sal = findValueByKeywords(closest.values, ['salinity', 'sal']);
+      const temp = findValueByKeywords(closest.values, ['temperature', 'temp', 't°c']);
+      const o2 = findValueByKeywords(closest.values, ['oxygen', 'o2', 'dox', 'd.o']);
+      if (sal === undefined || temp === undefined || o2 === undefined || isNaN(sal) || isNaN(temp) || isNaN(o2)) return null;
+
+      const aou = calculateAOU(sal, temp, o2);
+      
+      let depthGroup = 'Deep (>1000m)';
+      if (s.depth! < 200) depthGroup = 'Upper (<200m)';
+      else if (s.depth! <= 1000) depthGroup = 'Intermediate (200-1000m)';
+
+      return {
+        station: s.station,
+        depth: s.depth!,
+        doc: s.concentration,
+        aou: parseFloat(aou.toFixed(2)),
+        depthGroup
+      };
+    }).filter(Boolean) as { station: string; depth: number; doc: number; aou: number; depthGroup: string }[];
+  }, [originalProcessedSamples, findHydroDataForSample]);
+
+  const aouDocStats = useMemo(() => {
+    if (aouDocData.length < 2) return null;
+    const points = aouDocData.map(d => ({ x: d.aou, y: d.doc }));
+    const fit = fitCalibrationCurve(points, false);
+    return fit; // { slope, intercept, rsq }
+  }, [aouDocData]);
+
+  const aouDocRegressionLine = useMemo(() => {
+    if (aouDocData.length < 2 || !aouDocStats) return [];
+    const aous = aouDocData.map(d => d.aou);
+    const minAou = Math.min(...aous);
+    const maxAou = Math.max(...aous);
+    return [
+      { aou: minAou, doc: aouDocStats.slope * minAou + aouDocStats.intercept },
+      { aou: maxAou, doc: aouDocStats.slope * maxAou + aouDocStats.intercept }
+    ];
+  }, [aouDocData, aouDocStats]);
 
   const stationJitteredCoords2D = useMemo(() => {
     const validSamples = processedSamples.filter(
@@ -1378,6 +1519,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
   const chart1dContainerRef = useRef<HTMLDivElement>(null);
 
   const [contourSvgPaths, setContourSvgPaths] = useState<{ path: string; value: number }[]>([]);
+  const [densityContourPaths, setDensityContourPaths] = useState<{ path: string; value: number; labelX?: number; labelY?: number; angle?: number }[]>([]);
   const [interpolatedPoints, setInterpolatedPoints] = useState<{ x: number; y: number; name: string }[]>([]);
   const [contourDataPoints, setContourDataPoints] = useState<{ cx: number; cy: number; conc: number; xNorm: number; yNorm: number }[]>([]);
   const [topStationTicks, setTopStationTicks] = useState<{ name: string; cx: number }[]>([]);
@@ -1782,13 +1924,25 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const ySpan = maxY - minY || 1;
 
     // Normalized points for interpolation
-    const dataPoints = filteredSamples.map(s => ({
-      x: (getXValue(s) - minX) / xSpan,
-      y: ((s.depth! - minY) / ySpan) * anisotropyFactor,
-      z: s.concentration,
-      rawX: (getXValue(s) - minX) / xSpan,
-      rawY: (s.depth! - minY) / ySpan
-    }));
+    const dataPoints = filteredSamples.map(s => {
+      let densityVal = 27.0; // default/fallback
+      const closestHydro = findHydroDataForSample(s.station, s.depth);
+      if (closestHydro) {
+        const sal = findValueByKeywords(closestHydro.values, ['salinity', 'sal']);
+        const temp = findValueByKeywords(closestHydro.values, ['temperature', 'temp', 't°c']);
+        if (sal !== undefined && temp !== undefined) {
+          densityVal = calculatePotentialDensityAnomaly(sal, temp);
+        }
+      }
+      return {
+        x: (getXValue(s) - minX) / xSpan,
+        y: ((s.depth! - minY) / ySpan) * anisotropyFactor,
+        z: s.concentration,
+        rawX: (getXValue(s) - minX) / xSpan,
+        rawY: (s.depth! - minY) / ySpan,
+        densityVal
+      };
+    });
 
     const getBathyDepthAtX = (xVal: number): number => {
       if (!highResBathyPoints || highResBathyPoints.length === 0) {
@@ -1825,7 +1979,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       return sortedBathy[sortedBathy.length - 1].depth;
     };
 
-    const isPathBlocked = (pt: typeof dataPoints[0], gridXNorm: number, gridYNorm: number) => {
+    const isPathBlocked = (pt: any, gridXNorm: number, gridYNorm: number) => {
       if (!chartStyles.respectBathyBarriers) return false;
       const xp = minX + gridXNorm * xSpan;
       const yp = minY + (gridYNorm / anisotropyFactor) * ySpan;
@@ -1848,6 +2002,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     const gridWidth = 80;
     const gridHeight = 80;
     const gridValues = new Float32Array(gridWidth * gridHeight);
+    const gridDensityValues = new Float32Array(gridWidth * gridHeight);
     const gridDistSq = new Float32Array(gridWidth * gridHeight);
 
     for (let r = 0; r < gridHeight; r++) {
@@ -1864,6 +2019,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         // 1. Interpolate value using only unblocked points (or fallback if all are blocked)
         gridValues[idx] = interpolateIDW(unblockedPoints.length > 0 ? unblockedPoints : dataPoints, gridXNorm, gridYNorm, idwPower);
         
+        // Interpolate potential density anomaly
+        const densityPoints = (unblockedPoints.length > 0 ? unblockedPoints : dataPoints).map(pt => ({
+          x: pt.x,
+          y: pt.y,
+          z: (pt as any).densityVal || 27.0
+        }));
+        gridDensityValues[idx] = interpolateIDW(densityPoints, gridXNorm, gridYNorm, idwPower);
+
         // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
         let minDistSq = 999999;
         for (let i = 0; i < dataPoints.length; i++) {
@@ -1917,6 +2080,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     return {
       gridValues,
+      gridDensityValues,
       gridDistSq,
       minX,
       maxX,
@@ -2017,7 +2181,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       return sortedBathy[sortedBathy.length - 1].depth;
     };
 
-    const isPathBlocked = (pt: typeof dataPoints[0], gridXNorm: number, gridYNorm: number) => {
+    const isPathBlocked = (pt: any, gridXNorm: number, gridYNorm: number) => {
       if (!chartStyles.respectBathyBarriers) return false;
       const xp = minX + gridXNorm * xSpan;
       const yp = minY + (gridYNorm / anisotropyFactor) * ySpan;
@@ -2055,7 +2219,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
         
         // 1. Interpolate value using only unblocked points (or fallback if all are blocked)
         gridValues[idx] = interpolateIDW(unblockedPoints.length > 0 ? unblockedPoints : dataPoints, gridXNorm, gridYNorm, idwPower);
-        
+
         // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
         let minDistSq = 999999;
         for (let i = 0; i < dataPoints.length; i++) {
@@ -2122,7 +2286,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       ticks,
       validSamples: unfilteredValidSamples
     };
-  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D]);
+  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D, findHydroDataForSample]);
 
   // Draw contour plot on dependencies change
   useEffect(() => {
@@ -2142,6 +2306,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     const {
       gridValues,
+      gridDensityValues,
       gridDistSq,
       minX,
       xSpan,
@@ -2328,6 +2493,64 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
       };
     });
     setContourSvgPaths(paths);
+
+    if (showDensityOverlay && gridDensityValues) {
+      const densityThresholds = [24.0, 24.5, 25.0, 25.5, 26.0, 26.5, 26.8, 27.0, 27.2, 27.4, 27.6, 27.8];
+      const densityContourGen = contours()
+        .size([gridWidth, gridHeight])
+        .thresholds(densityThresholds);
+      
+      const computedDensityContours = densityContourGen(Array.from(gridDensityValues));
+      const densityPaths = computedDensityContours.map((contour) => {
+        let pathStr = "";
+        let labelX = 0;
+        let labelY = 0;
+        let angle = 0;
+        if (contour.coordinates) {
+          contour.coordinates.forEach((polygon) => {
+            polygon.forEach((ring) => {
+              ring.forEach((coord, i) => {
+                const x = invertXAxis2D ? (gridWidth - coord[0]) * scaleX : coord[0] * scaleX;
+                const y = coord[1] * scaleY;
+                if (i === 0) pathStr += `M${x},${y}`;
+                else pathStr += `L${x},${y}`;
+              });
+              pathStr += "Z";
+            });
+          });
+
+          if (contour.coordinates[0] && contour.coordinates[0][0]) {
+            const ring = contour.coordinates[0][0];
+            const midIdx = Math.floor(ring.length / 2);
+            if (ring[midIdx]) {
+              labelX = invertXAxis2D ? (gridWidth - ring[midIdx][0]) * scaleX : ring[midIdx][0] * scaleX;
+              labelY = ring[midIdx][1] * scaleY;
+
+              const p1 = ring[Math.max(0, midIdx - 2)] || ring[midIdx];
+              const p2 = ring[Math.min(ring.length - 1, midIdx + 2)] || ring[midIdx];
+              const dx = (p2[0] - p1[0]) * scaleX * (invertXAxis2D ? -1 : 1);
+              const dy = (p2[1] - p1[1]) * scaleY;
+              if (Math.abs(dx) > 1e-5 || Math.abs(dy) > 1e-5) {
+                angle = Math.atan2(dy, dx) * (180 / Math.PI);
+                if (angle > 90) angle -= 180;
+                if (angle < -90) angle += 180;
+              }
+            }
+          }
+        }
+        return {
+          path: pathStr,
+          value: contour.value,
+          labelX,
+          labelY,
+          angle
+        };
+      });
+      setDensityContourPaths(densityPaths);
+    } else {
+      setDensityContourPaths([]);
+    }
+
     setContourDataPoints(sampleDots);
     setInterpolatedPoints(labelsList);
 
@@ -2368,7 +2591,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
     }
     setBathyPath(pathStr);
     setTopStationTicks(ticks);
-  }, [canvasElement, gridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
+  }, [canvasElement, gridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints, showDensityOverlay]);
 
   // Draw unfiltered contour plot on dependencies change
   useEffect(() => {
@@ -2817,6 +3040,20 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
           >
             <Map size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
             <span>2D 断面彩色等值线分布图</span>
+          </div>
+          <div
+            className={`tab-btn ${visSubTab === 'tsPlot' ? 'active' : ''}`}
+            onClick={() => setVisSubTab('tsPlot')}
+          >
+            <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+            <span>T-S (温盐等密度) 水团图</span>
+          </div>
+          <div
+            className={`tab-btn ${visSubTab === 'aouDocPlot' ? 'active' : ''}`}
+            onClick={() => setVisSubTab('aouDocPlot')}
+          >
+            <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+            <span>AOU vs. DOC 降解关系图</span>
           </div>
         </div>
 
@@ -4910,6 +5147,10 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                           <input type="checkbox" checked={chartStyles.respectBathyBarriers ?? true} onChange={e => setChartStyles(prev => ({ ...prev, respectBathyBarriers: e.target.checked }))} />
                           <span>遵循水深地形屏障 (Respect Bathymetry Barriers)</span>
                         </label>
+                        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', color: '#16a34a' }}>
+                          <input type="checkbox" checked={showDensityOverlay} onChange={e => setShowDensityOverlay(e.target.checked)} />
+                          <span>叠加等密度水团线 (Overlay Density Contours)</span>
+                        </label>
                       </div>
 
                       {/* 2D Sampling Points customization */}
@@ -5300,7 +5541,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                   </linearGradient>
                 </defs>
 
-                {/* Contour lines (clipped to canvas box) */}
+                 {/* Contour lines (clipped to canvas box) */}
                 <g clipPath={`url(#plot-area-clip-${instanceId})`}>
                   {contourSvgPaths.map((p: { path: string; value: number }, i: number) => {
                     return (
@@ -5314,6 +5555,54 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       />
                     );
                   })}
+
+                  {/* Density Contours overlay (if enabled) */}
+                  {showDensityOverlay && densityContourPaths.map((p, i) => {
+                    return (
+                      <path
+                        key={`density-${i}`}
+                        d={p.path}
+                        transform="translate(100, 90)"
+                        fill="none"
+                        stroke="#000000"
+                        strokeWidth={1.75}
+                        strokeDasharray="4 4"
+                      />
+                    );
+                  })}
+
+                  {/* Density Contour value labels */}
+                  {showDensityOverlay && showContourLabels && densityContourPaths.map((p, i) => {
+                    if (p.labelX === undefined || p.labelY === undefined || p.labelX === 0 || p.labelY === 0) return null;
+                    return (
+                      <g key={`density-label-${i}`} transform={`translate(${p.labelX + 100}, ${p.labelY + 90}) rotate(${p.angle || 0})`}>
+                        <rect
+                          x={-16}
+                          y={-6}
+                          width={32}
+                          height={12}
+                          fill="#ffffff"
+                          opacity={0.85}
+                          rx={2}
+                          ry={2}
+                        />
+                        <text
+                          x={0}
+                          y={3.5}
+                          textAnchor="middle"
+                          fill="#000000"
+                          style={{
+                            fontSize: '8px',
+                            fontFamily: chartStyles.fontFamily,
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          {p.value.toFixed(1)}
+                        </text>
+                      </g>
+                    );
+                  })}
+
 
                   {/* Contour value labels */}
                   {showContourLabels && contourSvgPaths.map((p: { path: string; value: number; labelX?: number; labelY?: number; angle?: number }, i: number) => {
@@ -6136,6 +6425,182 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                 );
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Sub-tab: T-S Diagram */}
+      {visSubTab === 'tsPlot' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px', alignItems: 'start' }}>
+          <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: 0, color: '#0f172a' }}>
+              温盐等密度 (T-S) 分析
+            </h4>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              T-S 关系图是海洋学中识别海水物理水团的核心工具。背景中的灰色虚线表示特定的潜在密度异常等值线 ($\sigma_\theta$)。
+            </p>
+            <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}>
+              <span className="text-xs font-bold text-slate-700 block mb-2">主要印度洋中深层水团特征：</span>
+              <ul className="text-xs text-slate-600 space-y-2 list-disc list-inside">
+                <li><strong className="text-sky-600">STUW</strong>: 副热带表层水，高盐最大值（盐度 &gt; 35.5）</li>
+                <li><strong className="text-emerald-600">SAMW</strong>: 亚南极模态水，$\sigma_\theta \approx 26.5 - 26.8$</li>
+                <li><strong className="text-indigo-600">AAIW</strong>: 南极中层水，盐度极小值 &lt; 34.4, $\sigma_\theta \approx 27.0 - 27.3$</li>
+                <li><strong className="text-slate-600">CDW/NADW</strong>: 绕极深层水/北大西洋深层水，偏高盐，低温 ($\sigma_\theta &gt; 27.6$)</li>
+              </ul>
+            </div>
+            <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', fontSize: '11px', color: '#64748b' }}>
+              <span>共计绘制了 <strong className="text-slate-800">{tsData.length}</strong> 个 CTD 水文温盐采样点。</span>
+            </div>
+          </div>
+
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', margin: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 className="card-title" style={{ margin: 0 }}>
+                南印度洋水文温盐等密度 (T-S) 分布图
+              </h3>
+            </div>
+            <div style={{ width: '100%', height: '500px', background: '#ffffff', borderRadius: '8px', padding: '10px' }}>
+              {tsData.length === 0 ? (
+                <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
+                  未检测到水文温盐数据，请先上传 CTD 水文数据
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 20, right: 30, bottom: 30, left: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis
+                      type="number"
+                      dataKey="salinity"
+                      name="Salinity"
+                      unit=" psu"
+                      domain={['dataMin - 0.2', 'dataMax + 0.2']}
+                      tick={{ fontSize: 10, fill: '#64748b' }}
+                      label={{ value: 'Salinity [psu]', position: 'insideBottom', offset: -15, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="temperature"
+                      name="Temperature"
+                      unit=" °C"
+                      domain={['dataMin - 1', 'dataMax + 1']}
+                      tick={{ fontSize: 10, fill: '#64748b' }}
+                      label={{ value: 'Potential Temperature [°C]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
+                    />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                    <Legend verticalAlign="top" height={36} iconType="circle" />
+                    
+                    {/* Background Isopycnals */}
+                    {densityContoursTS.map((c) => (
+                      <Scatter
+                        key={`sig-ts-${c.sigma}`}
+                        name={`σθ = ${c.sigma}`}
+                        data={c.points}
+                        fill="none"
+                        line={{ stroke: '#cbd5e1', strokeWidth: 0.75, strokeDasharray: '4 4' }}
+                        shape={<g />}
+                        legendType="none"
+                      />
+                    ))}
+
+                    <Scatter name="表层水团 (<200m)" data={tsData.filter(d => d.depthGroup === 'Upper (<200m)')} fill="#ea580c" shape="circle" />
+                    <Scatter name="中层水团 (200-1000m)" data={tsData.filter(d => d.depthGroup === 'Intermediate (200-1000m)')} fill="#059669" shape="circle" />
+                    <Scatter name="深层水团 (&gt;1000m)" data={tsData.filter(d => d.depthGroup === 'Deep (>1000m)')} fill="#1d4ed8" shape="circle" />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sub-tab: AOU vs. DOC Scatter Plot */}
+      {visSubTab === 'aouDocPlot' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px', alignItems: 'start' }}>
+          <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <h4 style={{ fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: 0, color: '#0f172a' }}>
+              AOU vs. DOC 呼吸关系分析
+            </h4>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              表观耗氧量 (AOU) 反应了水团生物地球化学的老化与有机物矿化消耗氧气的程度。DOC 与 AOU 的负相关斜率代表 DOC 降解对海水总呼吸消耗的贡献率。
+            </p>
+            {aouDocStats && (
+              <div style={{ backgroundColor: 'var(--bg-secondary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span className="text-xs font-bold text-slate-700 block mb-2">线性回归分析结果：</span>
+                <div className="space-y-1 text-xs text-slate-600 font-medium">
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>拟合公式:</span>
+                    <strong className="text-sky-700">DOC = {aouDocStats.slope.toFixed(4)} * AOU + {aouDocStats.intercept.toFixed(2)}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>消耗贡献率 (Slope):</span>
+                    <strong className="text-sky-700">{(Math.abs(aouDocStats.slope) * 100).toFixed(2)}%</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>决定系数 (R²):</span>
+                    <strong className="text-amber-600">{aouDocStats.rsq.toFixed(4)}</strong>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', fontSize: '11px', color: '#64748b' }}>
+              <span>成功匹配 DOC 测定值与水文 AOU 值的样本点：<strong className="text-slate-800">{aouDocData.length}</strong> 个。</span>
+            </div>
+          </div>
+
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', margin: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 className="card-title" style={{ margin: 0 }}>
+                南印度洋 AOU 与 DOC 生物地球化学降解关系图
+              </h3>
+            </div>
+            <div style={{ width: '100%', height: '500px', background: '#ffffff', borderRadius: '8px', padding: '10px' }}>
+              {aouDocData.length === 0 ? (
+                <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
+                  未匹配到相同站位和深度上的 AOU 与 DOC 观测值
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 20, right: 30, bottom: 30, left: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis
+                      type="number"
+                      dataKey="aou"
+                      name="AOU"
+                      unit=" µmol/kg"
+                      domain={['dataMin - 10', 'dataMax + 10']}
+                      tick={{ fontSize: 10, fill: '#64748b' }}
+                      label={{ value: 'Apparent Oxygen Utilization (AOU) [µmol/kg]', position: 'insideBottom', offset: -15, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="doc"
+                      name="DOC"
+                      unit=" µmol/L"
+                      domain={['dataMin - 5', 'dataMax + 5']}
+                      tick={{ fontSize: 10, fill: '#64748b' }}
+                      label={{ value: 'Dissolved Organic Carbon (DOC) [µmol/L]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
+                    />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                    <Legend verticalAlign="top" height={36} iconType="circle" />
+                    
+                    {/* Linear Regression Fit Line */}
+                    {aouDocRegressionLine.length > 0 && (
+                      <Scatter
+                        name="线性拟合趋势线 (All Samples)"
+                        data={aouDocRegressionLine}
+                        fill="none"
+                        line={{ stroke: '#dc2626', strokeWidth: 1.5 }}
+                        shape={<g />}
+                      />
+                    )}
+
+                    <Scatter name="表层水团 (<200m)" data={aouDocData.filter(d => d.depthGroup === 'Upper (<200m)')} fill="#ea580c" shape="circle" />
+                    <Scatter name="中层水团 (200-1000m)" data={aouDocData.filter(d => d.depthGroup === 'Intermediate (200-1000m)')} fill="#059669" shape="circle" />
+                    <Scatter name="深层水团 (&gt;1000m)" data={aouDocData.filter(d => d.depthGroup === 'Deep (>1000m)')} fill="#1d4ed8" shape="circle" />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              )}
+            </div>
           </div>
         </div>
       )}
