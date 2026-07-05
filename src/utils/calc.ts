@@ -270,10 +270,66 @@ export function calculateOxygenSaturation(S: number, T: number): number {
 }
 
 /**
- * Calculates Apparent Oxygen Utilization (AOU) in umol/kg.
+ * Calculates Potential Temperature (theta) in °C from Salinity, Temperature, and Pressure.
+ * Bryden (1973) polynomial fit.
+ * S: Salinity (psu)
+ * T: In-situ Temperature (°C)
+ * P: Pressure (dbar, or depth in meters as approximation)
  */
-export function calculateAOU(S: number, T: number, O2Obs: number): number {
-  const sat = calculateOxygenSaturation(S, T);
+export function calculatePotentialTemperature(S: number, T: number, P: number): number {
+  const ds = S - 35.0;
+  
+  // Adiabatic lapse rate (deg C per dbar)
+  const adiabaticLapseRate = (
+    (3.5803e-5 +
+      T * (1.01e-6 - T * (5.7e-9 - T * 1.5e-11))) +
+    ds * (1.874e-6 - T * (4.2e-8 - T * 6.5e-10)) +
+    P * (1.874e-8 + T * (6.9e-10 - T * 1.1e-11))
+  );
+  
+  const k1 = P * adiabaticLapseRate;
+  
+  const t2 = T + 0.5 * k1;
+  const p2 = 0.5 * P;
+  const alr2 = (
+    (3.5803e-5 +
+      t2 * (1.01e-6 - t2 * (5.7e-9 - t2 * 1.5e-11))) +
+    ds * (1.874e-6 - t2 * (4.2e-8 - t2 * 6.5e-10)) +
+    p2 * (1.874e-8 + t2 * (6.9e-10 - t2 * 1.1e-11))
+  );
+  const k2 = P * alr2;
+  
+  const t3 = T + 0.5 * k2;
+  const alr3 = (
+    (3.5803e-5 +
+      t3 * (1.01e-6 - t3 * (5.7e-9 - t3 * 1.5e-11))) +
+    ds * (1.874e-6 - t3 * (4.2e-8 - t3 * 6.5e-10)) +
+    p2 * (1.874e-8 + t3 * (6.9e-10 - t3 * 1.1e-11))
+  );
+  const k3 = P * alr3;
+  
+  const t4 = T + k3;
+  const alr4 = (
+    (3.5803e-5 +
+      t4 * (1.01e-6 - t4 * (5.7e-9 - t4 * 1.5e-11))) +
+    ds * (1.874e-6 - t4 * (4.2e-8 - t4 * 6.5e-10)) +
+    P * (1.874e-8 + t4 * (6.9e-10 - t4 * 1.1e-11))
+  );
+  const k4 = P * alr4;
+  
+  return T - (k1 + 2 * k2 + 2 * k3 + k4) / 6;
+}
+
+/**
+ * Calculates Apparent Oxygen Utilization (AOU) in umol/kg.
+ * S: Salinity (psu)
+ * T: In-situ Temperature (°C)
+ * O2Obs: Observed Oxygen (umol/kg)
+ * P: Pressure (dbar)
+ */
+export function calculateAOU(S: number, T: number, O2Obs: number, P?: number): number {
+  const theta = P !== undefined ? calculatePotentialTemperature(S, T, P) : T;
+  const sat = calculateOxygenSaturation(S, theta);
   const aou = sat - O2Obs;
   return aou;
 }
