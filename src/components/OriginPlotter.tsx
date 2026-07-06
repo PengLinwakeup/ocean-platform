@@ -12,7 +12,7 @@ import {
 
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
 
-  CartesianGrid, Tooltip, ErrorBar, Legend
+  CartesianGrid, Tooltip, ErrorBar, Legend, ReferenceArea, ReferenceDot
 
 } from 'recharts';
 
@@ -24,7 +24,7 @@ import { curveCardinal } from 'd3-shape';
 
 import { normalizeStationName } from '../utils/stationParser';
 
-import { interpolateIDW, calculatePotentialDensityAnomaly, calculateAOU, fitCalibrationCurve, calculatePotentialTemperature } from '../utils/calc';
+import { interpolateIDW, calculatePotentialDensityAnomaly, calculateAOU, fitCalibrationCurve } from '../utils/calc';
 
 import { ExcelSampleInfo, HydrologicalSample } from '../types';
 
@@ -728,7 +728,13 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
   const [showDensityOverlay, setShowDensityOverlay] = useState<boolean>(() => loadSavedState<boolean>('ocean_showDensityOverlay', false));
 
-  const [fitOnlyIntermediate, setFitOnlyIntermediate] = useState<boolean>(() => loadSavedState<boolean>('ocean_fitOnlyIntermediate', false));
+  const [_fitOnlyIntermediate, _setFitOnlyIntermediate] = useState<boolean>(() => loadSavedState<boolean>('ocean_fitOnlyIntermediate', false));
+
+  const [tsSectionView, setTsSectionView] = useState<'scatter' | 'section'>('scatter');
+
+  const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity'>('temperature');
+
+  const [tsSectionAxis, setTsSectionAxis] = useState<'longitude' | 'latitude'>('longitude');
 
   const [selectedRegionFit, setSelectedRegionFit] = useState<'all' | 'wbc' | 'cg' | 'ebc' | 'custom'>(() => loadSavedState<'all' | 'wbc' | 'cg' | 'ebc' | 'custom'>('ocean_selectedRegionFit', 'all'));
 
@@ -2043,7 +2049,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       // Calculate potential density anomaly (sigma-theta) using potential temperature
 
-      const theta = closest.pressure !== undefined ? calculatePotentialTemperature(sal, temp, closest.pressure) : temp;
+      // const _theta = closest.pressure !== undefined ? calculatePotentialTemperature(sal, temp, closest.pressure) : temp;
 
       // const sigma = calculatePotentialDensityAnomaly(sal, theta);
 
@@ -13012,170 +13018,599 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       {/* Sub-tab: T-S Diagram */}
 
-      {visSubTab === 'tsPlot' && (
+      {visSubTab === 'tsPlot' && (() => {
+        // Build section data from hydroSamples (includes lon/lat/depth/temp/sal)
+        const sectionData = (() => {
+          if (!hydroSamples || hydroSamples.length === 0) return [];
+          return hydroSamples.map(h => {
+            const findVal = (keys: string[]) => {
+              for (const k of keys) {
+                if (h.values[k] !== undefined && !isNaN(h.values[k])) return h.values[k];
+                const found = Object.entries(h.values).find(([key]) => key.toLowerCase() === k.toLowerCase());
+                if (found && !isNaN(found[1])) return found[1];
+              }
+              return undefined;
+            };
+            const sal = findVal(['salinity', 'sal', 'Salinity', 'Sal']);
+            const temp = findVal(['temperature', 'temp', 'Temperature', 'Temp', 't\u00b0c', 'T\u00b0C']);
+            if (sal === undefined || temp === undefined) return null;
+            return {
+              station: h.station,
+              longitude: h.longitude,
+              latitude: h.latitude,
+              depth: h.depth,
+              temperature: parseFloat((temp as number).toFixed(4)),
+              salinity: parseFloat((sal as number).toFixed(4)),
+            };
+          }).filter(Boolean) as { station: string; longitude: number; latitude: number; depth: number; temperature: number; salinity: number }[];
+        })();
 
-        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px', alignItems: 'start' }}>
+        // Inline canvas component for the section heatmap
+        const SectionCanvas = () => {
+          const canvasRef = useRef<HTMLCanvasElement>(null);
+          const containerDivRef = useRef<HTMLDivElement>(null);
 
-          <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          useEffect(() => {
+            const canvas = canvasRef.current;
+            const container = containerDivRef.current;
+            if (!canvas || !container || sectionData.length === 0) return;
 
-            <h4 style={{ fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: 0, color: '#0f172a' }}>
+            const dpr = window.devicePixelRatio || 1;
+            const W = container.clientWidth || 700;
+            const H = container.clientHeight || 460;
+            canvas.width = W * dpr;
+            canvas.height = H * dpr;
+            canvas.style.width = W + 'px';
+            canvas.style.height = H + 'px';
 
-              温盐等密度 (T-S) 分析
+            const ctx = canvas.getContext('2d')!;
+            ctx.scale(dpr, dpr);
+            ctx.clearRect(0, 0, W, H);
 
-            </h4>
+            const marginLeft = 65;
+            const marginRight = 90;
+            const marginTop = 36;
+            const marginBottom = 52;
+            const plotW = W - marginLeft - marginRight;
+            const plotH = H - marginTop - marginBottom;
 
-            <p className="text-xs text-slate-500 leading-relaxed">
+            const xKey = tsSectionAxis === 'longitude' ? 'longitude' : 'latitude';
+            const valKey = tsSectionParam;
 
-              T-S 关系图是海洋学中识别海水物理水团的核心工具。背景中的灰色虚线表示特定的潜在密度异常等值线 ($\sigma_\theta$)。
+            const xs = sectionData.map(d => d[xKey]);
+            const depths = sectionData.map(d => d.depth);
+            const vals = sectionData.map(d => d[valKey]);
 
-            </p>
+            const xMin = Math.min(...xs);
+            const xMax = Math.max(...xs);
+            const depthMax = Math.max(...depths);
+            const valMin = Math.min(...vals);
+            const valMax = Math.max(...vals);
+            const valRange = valMax - valMin || 1;
 
-            <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}>
+            // Scientific colormap (similar to jet: blue->cyan->green->yellow->red)
+            const getColor = (v: number): [number, number, number] => {
+              const t = Math.max(0, Math.min(1, (v - valMin) / valRange));
+              if (t < 0.125) {
+                const s = t / 0.125;
+                return [0, 0, Math.round(128 + s * 127)];
+              } else if (t < 0.375) {
+                const s = (t - 0.125) / 0.25;
+                return [0, Math.round(s * 255), 255];
+              } else if (t < 0.625) {
+                const s = (t - 0.375) / 0.25;
+                return [Math.round(s * 255), 255, Math.round(255 - s * 255)];
+              } else if (t < 0.875) {
+                const s = (t - 0.625) / 0.25;
+                return [255, Math.round(255 - s * 255), 0];
+              } else {
+                const s = (t - 0.875) / 0.125;
+                return [Math.round(255 - s * 127), 0, 0];
+              }
+            };
 
-              <span className="text-xs font-bold text-slate-700 block mb-2">主要印度洋中深层水团特征：</span>
+            // IDW heatmap grid
+            const gridCols = Math.min(220, Math.round(plotW));
+            const gridRows = Math.min(160, Math.round(plotH));
+            const power = 2;
+            const imageData = ctx.createImageData(gridCols, gridRows);
 
-              <ul className="text-xs text-slate-600 space-y-2 list-disc list-inside">
+            for (let row = 0; row < gridRows; row++) {
+              for (let col = 0; col < gridCols; col++) {
+                const gx = xMin + (col / (gridCols - 1)) * (xMax - xMin);
+                const gy = (row / (gridRows - 1)) * depthMax;
+                let wSum = 0, vSum = 0, exact = false, exactV = 0;
+                for (let i = 0; i < sectionData.length; i++) {
+                  const dx = (sectionData[i][xKey] - gx) / Math.max(xMax - xMin, 0.001);
+                  const dy = (sectionData[i].depth - gy) / Math.max(depthMax, 1);
+                  const dist2 = dx * dx + dy * dy;
+                  if (dist2 < 1e-12) { exact = true; exactV = sectionData[i][valKey]; break; }
+                  const w = 1 / Math.pow(dist2, power / 2);
+                  wSum += w; vSum += w * sectionData[i][valKey];
+                }
+                const interpVal = exact ? exactV : (wSum > 0 ? vSum / wSum : valMin);
+                const [r, g, b] = getColor(interpVal);
+                const idx = (row * gridCols + col) * 4;
+                imageData.data[idx] = r;
+                imageData.data[idx + 1] = g;
+                imageData.data[idx + 2] = b;
+                imageData.data[idx + 3] = 255;
+              }
+            }
 
-                <li><strong className="text-sky-600">STUW</strong>: 副热带表层水，高盐最大值（盐度 &gt; 35.5）</li>
+            // Offscreen canvas for smooth scaling
+            const off = document.createElement('canvas');
+            off.width = gridCols; off.height = gridRows;
+            off.getContext('2d')!.putImageData(imageData, 0, 0);
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(marginLeft, marginTop, plotW, plotH);
+            ctx.clip();
+            // Smooth interpolation
+            (ctx as any).imageSmoothingEnabled = true;
+            (ctx as any).imageSmoothingQuality = 'high';
+            ctx.drawImage(off, marginLeft, marginTop, plotW, plotH);
+            ctx.restore();
 
-                <li><strong className="text-emerald-600">SAMW</strong>: 亚南极模态水，$\sigma_\theta \approx 26.5 - 26.8$</li>
+            // Data points overlay
+            sectionData.forEach(d => {
+              const px = marginLeft + ((d[xKey] - xMin) / (xMax - xMin || 1)) * plotW;
+              const py = marginTop + (d.depth / (depthMax || 1)) * plotH;
+              ctx.beginPath();
+              ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+              ctx.fillStyle = 'rgba(255,255,255,0.75)';
+              ctx.fill();
+              ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+              ctx.lineWidth = 0.7;
+              ctx.stroke();
+            });
 
-                <li><strong className="text-indigo-600">AAIW</strong>: 南极中层水，盐度极小值 &lt; 34.4, $\sigma_\theta \approx 27.0 - 27.3$</li>
+            // Draw axes
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(marginLeft, marginTop);
+            ctx.lineTo(marginLeft, marginTop + plotH);
+            ctx.lineTo(marginLeft + plotW, marginTop + plotH);
+            ctx.stroke();
 
-                <li><strong className="text-slate-600">CDW/NADW</strong>: 绕极深层水/北大西洋深层水，偏高盐，低温 ($\sigma_\theta &gt; 27.6$)</li>
+            // Gridlines
+            ctx.setLineDash([3, 3]);
+            ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            ctx.lineWidth = 0.5;
+            for (let i = 1; i <= 5; i++) {
+              const py = marginTop + (i / 5) * plotH;
+              ctx.beginPath(); ctx.moveTo(marginLeft, py); ctx.lineTo(marginLeft + plotW, py); ctx.stroke();
+            }
+            for (let i = 1; i <= 6; i++) {
+              const px = marginLeft + (i / 6) * plotW;
+              ctx.beginPath(); ctx.moveTo(px, marginTop); ctx.lineTo(px, marginTop + plotH); ctx.stroke();
+            }
+            ctx.setLineDash([]);
 
-              </ul>
+            // X axis ticks
+            ctx.fillStyle = '#334155';
+            ctx.font = '10px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            const xTicks = 6;
+            for (let i = 0; i <= xTicks; i++) {
+              const v = xMin + (i / xTicks) * (xMax - xMin);
+              const px = marginLeft + (i / xTicks) * plotW;
+              ctx.strokeStyle = '#475569'; ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(px, marginTop + plotH); ctx.lineTo(px, marginTop + plotH + 5); ctx.stroke();
+              const label = tsSectionAxis === 'longitude'
+                ? (v >= 0 ? `${v.toFixed(1)}\u00b0E` : `${Math.abs(v).toFixed(1)}\u00b0W`)
+                : (v >= 0 ? `${v.toFixed(1)}\u00b0N` : `${Math.abs(v).toFixed(1)}\u00b0S`);
+              ctx.fillStyle = '#475569';
+              ctx.fillText(label, px, marginTop + plotH + 17);
+            }
 
+            // X label
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 11px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(tsSectionAxis === 'longitude' ? 'Longitude' : 'Latitude', marginLeft + plotW / 2, H - 6);
+
+            // Y axis ticks
+            ctx.textAlign = 'right';
+            ctx.font = '10px Inter, sans-serif';
+            ctx.fillStyle = '#334155';
+            const yTicks = 6;
+            for (let i = 0; i <= yTicks; i++) {
+              const v = (i / yTicks) * depthMax;
+              const py = marginTop + (i / yTicks) * plotH;
+              ctx.strokeStyle = '#475569'; ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(marginLeft, py); ctx.lineTo(marginLeft - 5, py); ctx.stroke();
+              ctx.fillText(`${Math.round(v)} m`, marginLeft - 8, py + 4);
+            }
+
+            // Y label
+            ctx.save();
+            ctx.translate(12, marginTop + plotH / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 11px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Depth (m)', 0, 0);
+            ctx.restore();
+
+            // Colorbar
+            const cbX = marginLeft + plotW + 14;
+            const cbW = 14;
+            const cbH = plotH;
+            const cbY = marginTop;
+            for (let i = 0; i < cbH; i++) {
+              const t = 1 - i / (cbH - 1);
+              const v = valMin + t * valRange;
+              const [r, g, b] = getColor(v);
+              ctx.fillStyle = `rgb(${r},${g},${b})`;
+              ctx.fillRect(cbX, cbY + i, cbW, 1);
+            }
+            ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 0.5;
+            ctx.strokeRect(cbX, cbY, cbW, cbH);
+
+            ctx.fillStyle = '#475569';
+            ctx.font = '9px Inter, sans-serif';
+            ctx.textAlign = 'left';
+            for (let i = 0; i <= 5; i++) {
+              const t = i / 5;
+              const v = valMin + t * valRange;
+              const py = cbY + cbH - t * cbH;
+              ctx.fillText(v.toFixed(1), cbX + cbW + 4, py + 3.5);
+            }
+
+            ctx.save();
+            ctx.translate(cbX + cbW + 46, cbY + cbH / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 10px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(tsSectionParam === 'temperature' ? 'Temperature (\u00b0C)' : 'Salinity (psu)', 0, 0);
+            ctx.restore();
+
+          }, [sectionData, tsSectionParam, tsSectionAxis]);
+
+          if (sectionData.length === 0) {
+            return (
+              <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                \u672a\u68c0\u6d4b\u5230\u6c34\u6587\u6e29\u76d0\u6570\u636e\uff0c\u8bf7\u5148\u4e0a\u4f20 CTD \u6c34\u6587\u6570\u636e
+              </div>
+            );
+          }
+          return (
+            <div ref={containerDivRef} style={{ width: '100%', height: '100%' }}>
+              <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
             </div>
+          );
+        };
 
-            <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', fontSize: '11px', color: '#64748b' }}>
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px', alignItems: 'start' }}>
 
-              <span>共计绘制了 <strong className="text-slate-800">{tsData.length}</strong> 个 CTD 水文温盐采样点。</span>
+            <div className="ts-info-card">
 
-            </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
 
-          </div>
+                <div style={{ width: '3px', height: '20px', borderRadius: '2px', background: 'linear-gradient(180deg, #0ea5e9, #6366f1)' }} />
 
+                <h4 style={{ fontSize: '14px', fontWeight: 700, margin: 0, color: '#0f172a' }}>
 
+                  \u6e29\u76d0\u7b49\u5bc6\u5ea6 (T-S) \u5206\u6790
 
-          <div className="card" style={{ display: 'flex', flexDirection: 'column', margin: 0 }}>
+                </h4>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              </div>
 
-              <h3 className="card-title" style={{ margin: 0 }}>
+              <p className="text-xs text-slate-500 leading-relaxed" style={{ margin: 0 }}>
 
-                南印度洋水文温盐等密度 (T-S) 分布图
+                T-S \u5173\u7cfb\u56fe\u662f\u6d77\u6d0b\u5b66\u4e2d\u8bc6\u522b\u6d77\u6c34\u7269\u7406\u6c34\u56e2\u7684\u6838\u5fc3\u5de5\u5177\u3002\u80cc\u666f\u4e2d\u7684\u7070\u8272\u865a\u7ebf\u8868\u793a\u7279\u5b9a\u7684\u6f5c\u5728\u5bc6\u5ea6\u5f02\u5e38\u7b49\u503c\u7ebf ($\sigma_\theta$)\u3002\u65ad\u9762\u56fe\u663e\u793a\u6e29\u5ea6/\u76d0\u5ea6\u968f\u7ecf\u7eac\u5ea6\u548c\u6df1\u5ea6\u7684\u5206\u5e03\u3002
 
-              </h3>
+              </p>
 
-            </div>
+              <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}>
 
-            <div style={{ width: '100%', height: '500px', background: '#ffffff', borderRadius: '8px', padding: '10px' }}>
+                <span className="text-xs font-bold text-slate-600" style={{ display: 'block', marginBottom: '10px' }}>\u4e3b\u8981\u5370\u5ea6\u6d0b\u4e2d\u6df1\u5c42\u6c34\u56e2\u7279\u5f81\uff1a</span>
 
-              {tsData.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
 
-                <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
 
-                  未检测到水文温盐数据，请先上传 CTD 水文数据
+                    <span className="water-mass-badge stuw">STUW</span>
+
+                    <span style={{ fontSize: '11px', color: '#475569', lineHeight: 1.5 }}>\u526f\u70ed\u5e26\u8868\u5c42\u6c34\uff0c\u9ad8\u76d0\u6700\u5927\u503c\uff08\u76d0\u5ea6 &gt; 35.5\uff09</span>
+
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+
+                    <span className="water-mass-badge samw">SAMW</span>
+
+                    <span style={{ fontSize: '11px', color: '#475569', lineHeight: 1.5 }}>\u4e9a\u5357\u6781\u6a21\u6001\u6c34\uff0c$\sigma_\theta \approx 26.5 - 26.8$</span>
+
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+
+                    <span className="water-mass-badge aaiw">AAIW</span>
+
+                    <span style={{ fontSize: '11px', color: '#475569', lineHeight: 1.5 }}>\u5357\u6781\u4e2d\u5c42\u6c34\uff0c\u76d0\u5ea6\u6781\u5c0f\u503c &lt; 34.4, $\sigma_\theta \approx 27.0 - 27.3$</span>
+
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+
+                    <span className="water-mass-badge cdw">CDW/NADW</span>
+
+                    <span style={{ fontSize: '11px', color: '#475569', lineHeight: 1.5 }}>\u7ed5\u6781\u6df1\u5c42\u6c34/\u5317\u5927\u897f\u6d0b\u6df1\u5c42\u6c34\uff0c\u504f\u9ad8\u76d0\uff0c\u4f4e\u6e29 ($\sigma_\theta &gt; 27.6$)</span>
+
+                  </div>
 
                 </div>
 
-              ) : (
+              </div>
 
-                <ResponsiveContainer width="100%" height="100%">
+              <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '10px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
 
-                  <ScatterChart margin={{ top: 20, right: 30, bottom: 30, left: 20 }}>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>\u5171\u8ba1\u7ed8\u5236\u4e86</span>
 
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <span className="stat-highlight-num">{tsData.length}</span>
 
-                    <XAxis
+                <span style={{ fontSize: '11px', color: '#64748b' }}>\u4e2a CTD \u6c34\u6587\u6e29\u76d0\u91c7\u6837\u70b9\u3002</span>
 
-                      type="number"
+              </div>
 
-                      dataKey="salinity"
-
-                      name="Salinity"
-
-                      unit=" psu"
-
-                      domain={['dataMin - 0.2', 'dataMax + 0.2']}
-
-                      tick={{ fontSize: 10, fill: '#64748b' }}
-
-                      label={{ value: 'Salinity [psu]', position: 'insideBottom', offset: -15, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
-
-                    />
-
-                    <YAxis
-
-                      type="number"
-
-                      dataKey="temperature"
-
-                      name="Temperature"
-
-                      unit=" °C"
-
-                      domain={['dataMin - 1', 'dataMax + 1']}
-
-                      tick={{ fontSize: 10, fill: '#64748b' }}
-
-                      label={{ value: 'Potential Temperature [°C]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
-
-                    />
-
-                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-
-                    <Legend verticalAlign="top" height={36} iconType="circle" />
-
-                    
-
-                    {/* Background Isopycnals */}
-
-                    {densityContoursTS.map((c) => (
-
-                      <Scatter
-
-                        key={`sig-ts-${c.sigma}`}
-
-                        name={`σθ = ${c.sigma}`}
-
-                        data={c.points}
-
-                        fill="none"
-
-                        line={{ stroke: '#cbd5e1', strokeWidth: 0.75, strokeDasharray: '4 4' }}
-
-                        shape={<g />}
-
-                        legendType="none"
-
-                      />
-
-                    ))}
+            </div>
 
 
 
-                    <Scatter name="表层水团 (<200m)" data={tsData.filter(d => d.depthGroup === 'Upper (<200m)')} fill="#ea580c" shape="circle" />
+            <div className="card" style={{ display: 'flex', flexDirection: 'column', margin: 0 }}>
 
-                    <Scatter name="中层水团 (200-1000m)" data={tsData.filter(d => d.depthGroup === 'Intermediate (200-1000m)')} fill="#059669" shape="circle" />
+              {/* Internal view toggle row */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                <h3 className="card-title" style={{ margin: 0 }}>
+                  {tsSectionView === 'scatter' ? '\u5357\u5370\u5ea6\u6d0b\u6c34\u6587\u6e29\u76d0\u7b49\u5bc6\u5ea6 (T-S) \u5206\u5e03\u56fe' : '\u6c34\u6587\u53c2\u6570\u6df1\u5ea6\u65ad\u9762\u5206\u5e03\u56fe'}
+                </h3>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: '8px', padding: '3px', gap: '2px' }}>
+                    <button
+                      onClick={() => setTsSectionView('scatter')}
+                      style={{
+                        padding: '4px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer',
+                        fontSize: '11px', fontWeight: 700, transition: 'all 0.2s',
+                        background: tsSectionView === 'scatter' ? '#0ea5e9' : 'transparent',
+                        color: tsSectionView === 'scatter' ? '#fff' : '#64748b',
+                      }}
+                    >T-S \u6563\u70b9\u56fe</button>
+                    <button
+                      onClick={() => setTsSectionView('section')}
+                      style={{
+                        padding: '4px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer',
+                        fontSize: '11px', fontWeight: 700, transition: 'all 0.2s',
+                        background: tsSectionView === 'section' ? '#0ea5e9' : 'transparent',
+                        color: tsSectionView === 'section' ? '#fff' : '#64748b',
+                      }}
+                    >\u65ad\u9762\u5206\u5e03\u56fe</button>
+                  </div>
+                  {tsSectionView === 'section' && (
+                    <>
+                      <select
+                        value={tsSectionParam}
+                        onChange={e => setTsSectionParam(e.target.value as 'temperature' | 'salinity')}
+                        style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', background: '#fff', color: '#334155', cursor: 'pointer' }}
+                      >
+                        <option value="temperature">\u6e29\u5ea6 (\u00b0C)</option>
+                        <option value="salinity">\u76d0\u5ea6 (psu)</option>
+                      </select>
+                      <select
+                        value={tsSectionAxis}
+                        onChange={e => setTsSectionAxis(e.target.value as 'longitude' | 'latitude')}
+                        style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '6px', border: '1px solid #e2e8f0', background: '#fff', color: '#334155', cursor: 'pointer' }}
+                      >
+                        <option value="longitude">\u7ecf\u5411\u65ad\u9762</option>
+                        <option value="latitude">\u7eac\u5411\u65ad\u9762</option>
+                      </select>
+                    </>
+                  )}
+                </div>
+              </div>
 
-                    <Scatter name="深层水团 (&gt;1000m)" data={tsData.filter(d => d.depthGroup === 'Deep (>1000m)')} fill="#1d4ed8" shape="circle" />
+              <div style={{ width: '100%', height: '500px', background: '#ffffff', borderRadius: '8px', padding: tsSectionView === 'section' ? '0' : '10px', overflow: 'hidden' }}>
 
-                  </ScatterChart>
+                {tsSectionView === 'scatter' ? (
+                  tsData.length === 0 ? (
 
-                </ResponsiveContainer>
+                    <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8' }}>
 
-              )}
+                      \u672a\u68c0\u6d4b\u5230\u6c34\u6587\u6e29\u76d0\u6570\u636e\uff0c\u8bf7\u5148\u4e0a\u4f20 CTD \u6c34\u6587\u6570\u636e
+
+                    </div>
+
+                  ) : (() => {
+                    const salinities = tsData.map(d => d.salinity);
+                    const temperatures = tsData.map(d => d.temperature);
+                    const sMin = salinities.length > 0 ? Math.min(...salinities) : 32.5;
+                    const sMax = salinities.length > 0 ? Math.max(...salinities) : 37.0;
+                    const tMin = temperatures.length > 0 ? Math.min(...temperatures) : -2.0;
+                    const tMax = temperatures.length > 0 ? Math.max(...temperatures) : 35.0;
+                    const xMinLimit = sMin - 0.2;
+                    const xMaxLimit = sMax + 0.2;
+                    const yMinLimit = tMin - 1;
+                    const yMaxLimit = tMax + 1;
+
+                    return (
+                      <ResponsiveContainer width="100%" height="100%">
+
+                        <ScatterChart margin={{ top: 20, right: 30, bottom: 30, left: 20 }}>
+
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+
+                          <XAxis
+
+                            type="number"
+
+                            dataKey="salinity"
+
+                            name="Salinity"
+
+                            unit=" psu"
+
+                            domain={[xMinLimit, xMaxLimit]}
+
+                            tick={{ fontSize: 10, fill: '#64748b' }}
+
+                            tickFormatter={(v) => Number(v).toFixed(2)}
+
+                            label={{ value: 'Salinity [psu]', position: 'insideBottom', offset: -15, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
+
+                          />
+
+                          <YAxis
+
+                            type="number"
+
+                            dataKey="temperature"
+
+                            name="Temperature"
+
+                            unit=" \u00b0C"
+
+                            domain={[yMinLimit, yMaxLimit]}
+
+                            tick={{ fontSize: 10, fill: '#64748b' }}
+
+                            tickFormatter={(v) => Number(v).toFixed(1)}
+
+                            label={{ value: 'Potential Temperature [\u00b0C]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 12, fontWeight: 'bold' }}
+
+                          />
+
+                          <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+
+                          <Legend verticalAlign="top" height={36} iconType="circle" />
+
+                          {/* Academic Boxes (Water Masses) */}
+                          <ReferenceArea
+                            x1={35.2}
+                            x2={35.8}
+                            y1={16.0}
+                            y2={20.0}
+                            stroke="#0284c7"
+                            strokeWidth={1.5}
+                            strokeDasharray="3 3"
+                            fill="#0284c7"
+                            fillOpacity={0.06}
+                            label={{ value: 'STUW', position: 'center', fill: '#0369a1', fontSize: 10, fontWeight: 'bold' }}
+                          />
+
+                          <ReferenceArea
+                            x1={34.2}
+                            x2={34.6}
+                            y1={5.5}
+                            y2={8.5}
+                            stroke="#10b981"
+                            strokeWidth={1.5}
+                            strokeDasharray="3 3"
+                            fill="#10b981"
+                            fillOpacity={0.06}
+                            label={{ value: 'SAMW', position: 'center', fill: '#047857', fontSize: 10, fontWeight: 'bold' }}
+                          />
+
+                          <ReferenceArea
+                            x1={34.0}
+                            x2={34.4}
+                            y1={3.0}
+                            y2={7.0}
+                            stroke="#6366f1"
+                            strokeWidth={1.5}
+                            strokeDasharray="3 3"
+                            fill="#6366f1"
+                            fillOpacity={0.06}
+                            label={{ value: 'AAIW', position: 'center', fill: '#4338ca', fontSize: 10, fontWeight: 'bold' }}
+                          />
+
+                          {/* Background Isopycnals */}
+
+                          {densityContoursTS.map((c) => (
+
+                            <Scatter
+
+                              key={`sig-ts-${c.sigma}`}
+
+                              data={c.points}
+
+                              fill="none"
+
+                              line={{ stroke: '#cbd5e1', strokeWidth: 0.75, strokeDasharray: '4 4' }}
+
+                              shape={<g />}
+
+                              legendType="none"
+
+                            />
+
+                          ))}
+
+                          {/* Contour Labels along the lines */}
+                          {densityContoursTS.map((c) => {
+                            const visiblePoints = c.points.filter(p =>
+                              p.salinity >= xMinLimit &&
+                              p.salinity <= xMaxLimit &&
+                              p.temperature >= yMinLimit &&
+                              p.temperature <= yMaxLimit
+                            );
+                            const labelPt = visiblePoints[Math.floor(visiblePoints.length * 0.85)] || visiblePoints[visiblePoints.length - 1];
+                            return labelPt ? (
+                              <ReferenceDot
+                                key={`label-ts-${c.sigma}`}
+                                x={labelPt.salinity}
+                                y={labelPt.temperature}
+                                r={0}
+                                label={(props: any) => {
+                                  const px = props.cx !== undefined ? props.cx : props.x;
+                                  const py = props.cy !== undefined ? props.cy : props.y;
+                                  return (
+                                    <text
+                                      x={px}
+                                      y={py}
+                                      dy={-3}
+                                      fill="#64748b"
+                                      fontSize={9}
+                                      fontWeight={600}
+                                      textAnchor="middle"
+                                      stroke="#ffffff"
+                                      strokeWidth={2.5}
+                                      paintOrder="stroke"
+                                    >
+                                      {`\u03c3\u03b8 = ${c.sigma}`}
+                                    </text>
+                                  );
+                                }}
+                              />
+                            ) : null;
+                          })}
+
+                          <Scatter name="\u8868\u5c42\u6c34\u56e2 (<200m)" data={tsData.filter(d => d.depthGroup === 'Upper (<200m)')} fill="#ea580c" shape="circle" />
+
+                          <Scatter name="\u4e2d\u5c42\u6c34\u56e2 (200-1000m)" data={tsData.filter(d => d.depthGroup === 'Intermediate (200-1000m)')} fill="#059669" shape="circle" />
+
+                          <Scatter name="\u6df1\u5c42\u6c34\u56e2 (>1000m)" data={tsData.filter(d => d.depthGroup === 'Deep (>1000m)')} fill="#1d4ed8" shape="circle" />
+
+                        </ScatterChart>
+
+                      </ResponsiveContainer>
+                    );
+                  })()
+                ) : (
+                  <SectionCanvas />
+                )}
+
+              </div>
 
             </div>
 
           </div>
-
-        </div>
-
-      )}
-
+        );
+      })()}
 
 
       {/* Sub-tab: AOU vs. DOC Scatter Plot */}
