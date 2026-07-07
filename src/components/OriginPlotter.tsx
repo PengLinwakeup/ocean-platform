@@ -2137,11 +2137,10 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
-      // Resolve longitude & latitude
-
       const normSt = s.station ? normalizeStationName(s.station) : '';
 
-      const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+      const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+        || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
 
       const lon = sc ? sc.longitude : (s.longitude || 0);
 
@@ -2280,7 +2279,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     activeStations2D.forEach(st => {
 
-      const stSamples = validSamples.filter(s => s.station === st);
+      const normSt = normalizeStationName(st);
+
+      const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
 
       let coord = 0;
 
@@ -2346,7 +2347,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
         const normSt = normalizeStationName(st);
 
-        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+          || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
 
         if (sc) return { latitude: sc.latitude, longitude: sc.longitude };
 
@@ -2374,9 +2376,10 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
         const normSt = normalizeStationName(st);
 
-        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+          || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
 
-        if (sc && sc.botDepth !== undefined) return sc.botDepth;
+        if (sc && (sc as any).botDepth !== undefined) return (sc as any).botDepth;
 
 
 
@@ -4028,7 +4031,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     const filteredSamples = validSamples.filter(s => {
 
-      const stIdx = sortedStationsList.indexOf(s.station!);
+      const normS = normalizeStationName(s.station);
+
+      const stIdx = sortedStationsList.findIndex(st => normalizeStationName(st) === normS);
 
       return (
 
@@ -4118,13 +4123,15 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
         const sortedBathy = activeStations2D.map(st => {
 
-          const stSamples = validSamples.filter(s => s.station === st);
-
           const normSt = normalizeStationName(st);
 
-          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+          const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
 
-          const botDepthVal = sc?.botDepth !== undefined ? sc.botDepth
+          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+
+            || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
+
+          const botDepthVal = sc?.botDepth !== undefined ? (sc as any).botDepth
 
             : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
 
@@ -4412,7 +4419,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     };
 
-  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D]);
+  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D, hydroSamples]);
 
 
 
@@ -4456,7 +4463,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     const filteredSamples = unfilteredValidSamples.filter(s => {
 
-      const stIdx = sortedStationsList.indexOf(s.station!);
+      const normS = normalizeStationName(s.station);
+
+      const stIdx = sortedStationsList.findIndex(st => normalizeStationName(st) === normS);
 
       return (
 
@@ -4522,13 +4531,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
         const sortedBathy = activeStations2D.map(st => {
 
-          const stSamples = unfilteredValidSamples.filter(s => s.station === st);
-
           const normSt = normalizeStationName(st);
 
-          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+          const stSamples = unfilteredValidSamples.filter(s => normalizeStationName(s.station) === normSt);
 
-          const botDepthVal = sc?.botDepth !== undefined ? sc.botDepth
+          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+            || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
+
+          const botDepthVal = sc?.botDepth !== undefined ? (sc as any).botDepth
 
             : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
 
@@ -4796,7 +4806,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     };
 
-  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D, findHydroDataForSample]);
+  }, [processedSamples, sortedStationsList, idwPower, anisotropyFactor, minDepthFilter, maxDepthFilter, contourStartStation, contourEndStation, activeStations2D, stationJitteredCoords2D, contourXAxis, chartStyles.respectBathyBarriers, highResBathyPoints, stationCoords, invertXAxis2D, findHydroDataForSample, hydroSamples]);
 
 
 
@@ -5352,9 +5362,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       bathyPoints = activeStations2D.map(st => {
 
-        const stSamples = validSamples.filter(s => s.station === st);
-
         const normSt = normalizeStationName(st);
+
+        const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
 
         const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
 
@@ -5832,9 +5842,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       bathyPoints = activeStations2D.map(st => {
 
-        const stSamples = validSamples.filter(s => s.station === st);
-
         const normSt = normalizeStationName(st);
+
+        const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
 
         const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
 

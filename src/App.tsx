@@ -496,16 +496,26 @@ export default function App() {
       const isSeawater = displayName.toLowerCase() === 'dsw' || displayName.toLowerCase() === 'ssw' || displayName.toLowerCase().startsWith('sw');
 
       // Try matching via Excel sample info (Label ID matching sampleName)
-      const normName = normalizeStationName(displayName);
-      let excelMatch = stationCoords.find(c => normalizeStationName(c.labelId) === normName);
+      const standardizeLabel = (name: string) => {
+        let clean = name.replace(/[-_\s]/g, '').toLowerCase();
+        if (clean.startsWith('s') && !clean.startsWith('st') && /^[a-z]\d+/.test(clean)) {
+          clean = 'st' + clean.slice(1);
+        }
+        return clean;
+      };
+
+      const cleanDisplay = standardizeLabel(displayName);
+      let excelMatch = stationCoords.find(c => {
+        const cleanLabel = standardizeLabel(c.labelId);
+        return cleanLabel === cleanDisplay;
+      });
 
       // Fuzzy/Partial matching fallback: check if one contains the other (for non-standard names)
-      if (!excelMatch && normName) {
+      if (!excelMatch && cleanDisplay) {
         excelMatch = stationCoords.find(c => {
-          const normLabel = normalizeStationName(c.labelId);
-          if (!normLabel) return false;
-          // Check if one contains the other (e.g., "so30841459" contains "41459" or vice versa)
-          return normName.includes(normLabel) || normLabel.includes(normName);
+          const cleanLabel = standardizeLabel(c.labelId);
+          if (!cleanLabel) return false;
+          return cleanDisplay.includes(cleanLabel) || cleanLabel.includes(cleanDisplay);
         });
       }
 
@@ -517,13 +527,13 @@ export default function App() {
         depth = excelMatch.depth;
       } else {
         // Fallback to pattern parsing from sampleName
-        const stDepthMatch = displayName.match(/ST(\d+)-(\d+)/i);
+        const stDepthMatch = displayName.match(/S(?:T)?[-_]?(\d+)[-_]?(\d+)/i);
         if (stDepthMatch) {
-          station = `ST${stDepthMatch[1]}`;
+          station = `ST-${stDepthMatch[1]}`;
           depth = parseInt(stDepthMatch[2], 10);
         } else {
           const parts = displayName.split('-');
-          const stPart = parts.find((p: string) => p.toUpperCase().startsWith('ST'));
+          const stPart = parts.find((p: string) => p.toUpperCase().startsWith('ST') || (p.toUpperCase().startsWith('S') && /^[a-zA-Z]\d+/.test(p)));
           if (stPart) {
             station = stPart.toUpperCase();
           }
@@ -539,7 +549,8 @@ export default function App() {
       // Standardize parsed station name to match Excel coordinate sheet exactly, preventing duplicates like ST27 vs ST-27
       if (station && !excelMatch) {
         const normSt = normalizeStationName(station);
-        const match = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        const match = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+          || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
         if (match) {
           station = match.station;
         }
@@ -610,7 +621,7 @@ export default function App() {
         depth
       } as SampleGroup;
     });
-  }, [rawInjections, excludedInjections, emptyInjectionThreshold, stationCoords, customSampleNames]);
+  }, [rawInjections, excludedInjections, emptyInjectionThreshold, stationCoords, customSampleNames, hydroSamples]);
 
   // Calculate average area of MQ Blanks (specifically sampleId === 'Blank', excluding 'Cleaning')
   const mqBlankAverageArea = useMemo(() => {
@@ -782,7 +793,8 @@ export default function App() {
 
       // Match station coordinates
       const normStation = normalizeStationName(g.station);
-      const coordMatch = stationCoords.find(c => normalizeStationName(c.station) === normStation);
+      const coordMatch = stationCoords.find(c => normalizeStationName(c.station) === normStation)
+        || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normStation));
 
       return {
         ...g,
@@ -793,10 +805,10 @@ export default function App() {
         curveName: curve ? curve.name : '默认曲线',
         longitude: coordMatch?.longitude,
         latitude: coordMatch?.latitude,
-        botDepth: coordMatch?.botDepth
+        botDepth: (coordMatch as any)?.botDepth
       };
     });
-  }, [sampleGroups, calibrationCurves, sampleToCurveMap, rejectedSamples, stationCoords, curveOffsets, enableBlankCorrection, mqBlankAverageArea]);
+  }, [sampleGroups, calibrationCurves, sampleToCurveMap, rejectedSamples, stationCoords, curveOffsets, enableBlankCorrection, mqBlankAverageArea, hydroSamples]);
 
   // Sort processed samples for list rendering & export
   const sortedProcessedSamples = useMemo(() => {

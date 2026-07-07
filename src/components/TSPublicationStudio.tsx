@@ -1252,7 +1252,9 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
                 const px = plotX + ((centroid.x - xMin) / (xMax - xMin || 1)) * plotW;
                 // Place STUW slightly deeper (140m minimum) to vertically stack with Leeuwin Current Inflow
                 const py = plotY + (Math.max(140, centroid.depth) / depthMaxVal) * plotH;
-                const labelText = 'Subtropical Subsurface Water (STUW)';
+                const labelText = stuwWm.name.includes('SSW')
+                  ? 'Subtropical Surface/Subsurface Water (SSW/STUW)'
+                  : 'Subtropical Subsurface Water (STUW)';
 
                 ctx.save();
                 ctx.textAlign = 'center';
@@ -1557,19 +1559,22 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       setTsPubTempMax('22.0');
       setTsPubDepthMax('1200');
       setTsPubWaterMasses([
-        { id: 'stuw', name: 'STUW', sMin: 35.2, sMax: 35.8, tMin: 17.5, tMax: 22.0, color: '#0284c7', borderStyle: 'dashed' },
+        { id: 'stuw', name: 'SSW/STUW', sMin: 35.2, sMax: 35.8, tMin: 15.0, tMax: 22.0, color: '#0284c7', borderStyle: 'dashed' },
         { id: 'samw', name: 'SAMW', sMin: 34.2, sMax: 34.6, tMin: 5.5, tMax: 8.5, color: '#10b981', borderStyle: 'dashed' },
         { id: 'aaiw', name: 'AAIW', sMin: 34.0, sMax: 34.4, tMin: 3.0, tMax: 7.0, color: '#6366f1', borderStyle: 'dashed' },
+        { id: 'iiw', name: 'IIW', sMin: 34.4, sMax: 34.65, tMin: 4.5, tMax: 7.5, color: '#a855f7', borderStyle: 'dashed' },
+        { id: 'rspgiw', name: 'RSPGIW', sMin: 34.8, sMax: 35.4, tMin: 5.0, tMax: 10.0, color: '#ea580c', borderStyle: 'dashed' },
         { id: 'cdw_nadw', name: 'CDW/NADW', sMin: 34.65, sMax: 34.85, tMin: 1.0, tMax: 2.5, color: '#1d4ed8', borderStyle: 'dashed' }
       ]);
       setOmpEndmembers([
-        { name: 'STUW', s: 35.5, t: 19.5, tracerVal: 75 },
+        { name: 'SSW/STUW', s: 35.5, t: 19.5, tracerVal: 75 },
         { name: 'SAMW', s: 34.4, t: 7.0, tracerVal: 55 },
         { name: 'AAIW', s: 34.2, t: 4.5, tracerVal: 48 }
       ]);
       setTsPubAnnotations([
-        { id: '1', text: 'Subtropical Underwater', x: 12.0, depth: 150, color: '#000000', fontSize: 11 },
-        { id: '2', text: 'Antarctic Intermediate Water', x: 15.0, depth: 700, color: '#000000', fontSize: 11 }
+        { id: '1', text: 'Subtropical Surface/Subsurface Water', x: 12.0, depth: 150, color: '#000000', fontSize: 11 },
+        { id: '2', text: 'Antarctic Intermediate Water', x: 15.0, depth: 700, color: '#000000', fontSize: 11 },
+        { id: '3', text: 'Red Sea-Persian Gulf Int. Water', x: 18.0, depth: 800, color: '#ea580c', fontSize: 11 }
       ]);
     } else {
       setTsPubWaterMasses([]);

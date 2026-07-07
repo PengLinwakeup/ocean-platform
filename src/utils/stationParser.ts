@@ -137,9 +137,20 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
     const labelId = rawLabel ? rawLabel.toString().trim() : '';
     const station = rawSt.toString().trim();
     const depth = rawDepth !== undefined ? parseFloat(rawDepth) : 0;
-    const longitude = parseFloat(rawLon);
-    const latitude = parseFloat(rawLat);
+    let longitude = parseFloat(rawLon);
+    let latitude = parseFloat(rawLat);
     const botDepth = rawBotDepth !== undefined ? parseFloat(rawBotDepth) : undefined;
+    
+    // Check for column shift (e.g. Fluorescence columns present in headers but omitted in data rows)
+    if (row.length > 16) {
+      const posLat = parseFloat(row[15]);
+      const posLon = parseFloat(row[16]);
+      const posYear = parseFloat(row[17]);
+      if (posYear === 2024 || (posLat < 0 && posLat > -40 && posLon > 30 && posLon < 120)) {
+        latitude = posLat;
+        longitude = posLon;
+      }
+    }
     
     if (station && !isNaN(longitude) && !isNaN(latitude)) {
       sampleInfos.push({
@@ -261,8 +272,20 @@ export function parseHydrologicalExcel(
       }
     }
     
-    const latitude = parseFloat(rawLat);
-    const longitude = parseFloat(rawLon);
+    let latitude = parseFloat(rawLat);
+    let longitude = parseFloat(rawLon);
+    
+    // Check for column shift (e.g. Fluorescence columns present in headers but omitted in data rows)
+    if (row.length > 16) {
+      const posLat = parseFloat(row[15]);
+      const posLon = parseFloat(row[16]);
+      const posYear = parseFloat(row[17]);
+      if (posYear === 2024 || (posLat < 0 && posLat > -40 && posLon > 30 && posLon < 120)) {
+        latitude = posLat;
+        longitude = posLon;
+      }
+    }
+    
     const depth = rawDepth !== undefined ? parseFloat(rawDepth) : 0;
     const pressure = rawPress !== undefined ? parseFloat(rawPress) : depth; // fallback pressure to depth
     
