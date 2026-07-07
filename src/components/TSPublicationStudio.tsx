@@ -16,6 +16,13 @@ interface WaterMass {
   polygonPoints?: { s: number; t: number }[];
 }
 
+interface OmpEndmember {
+  name: string;
+  s: number;
+  t: number;
+  tracerVal: number;
+}
+
 interface SectionAnnotation {
   id: string;
   text: string;
@@ -53,11 +60,47 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   const [tsPubTempMin, setTsPubTempMin] = useState<string>('-2.0');
   const [tsPubTempMax, setTsPubTempMax] = useState<string>('2.5');
   const [tsPubDepthMax, setTsPubDepthMax] = useState<string>('800');
-  const [tsPubColorMode, setTsPubColorMode] = useState<'depth-gradient' | 'depth-group' | 'station' | 'uniform'>('depth-gradient');
+  const [tsPubColorMode, setTsPubColorMode] = useState<'depth-gradient' | 'depth-group' | 'station' | 'uniform' | 'station-gradient' | 'longitude-gradient'>('depth-gradient');
   const [tsPubPreset, setTsPubPreset] = useState<'antarctic' | 'indian' | 'custom'>('antarctic');
   
-  const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity'>('temperature');
+  const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity' | 'delta_tracer'>('temperature');
   const [tsSectionAxis, setTsSectionAxis] = useState<'longitude' | 'latitude' | 'distance'>('longitude');
+
+  const [enableOmp, setEnableOmp] = useState<boolean>(false);
+  const [selectedOmpTracer, setSelectedOmpTracer] = useState<string>('DOC');
+  const [ompEndmembers, setOmpEndmembers] = useState<OmpEndmember[]>([
+    { name: 'WW', s: 34.0, t: -1.5, tracerVal: 42 },
+    { name: 'TWW', s: 34.4, t: -1.2, tracerVal: 45 },
+    { name: 'CDW', s: 34.7, t: 1.0, tracerVal: 38 }
+  ]);
+
+  const availableTracers = useMemo(() => {
+    const keys = new Set<string>();
+    hydroSamples.forEach(h => {
+      if (h.values) {
+        Object.keys(h.values).forEach(k => {
+          if (typeof h.values[k] === 'number' && !isNaN(h.values[k])) {
+            const lk = k.toLowerCase();
+            if (lk !== 'salinity' && lk !== 'sal' && lk !== 'temperature' && lk !== 'temp' && lk !== 't°c' && lk !== 't') {
+              keys.add(k);
+            }
+          }
+        });
+      }
+    });
+    return Array.from(keys).sort();
+  }, [hydroSamples]);
+
+  useEffect(() => {
+    if (availableTracers.length > 0 && !availableTracers.includes(selectedOmpTracer)) {
+      const hasDoc = availableTracers.find(t => t.toLowerCase() === 'doc');
+      if (hasDoc) {
+        setSelectedOmpTracer(hasDoc);
+      } else {
+        setSelectedOmpTracer(availableTracers[0]);
+      }
+    }
+  }, [availableTracers, selectedOmpTracer]);
 
   const [tsPubWaterMasses, setTsPubWaterMasses] = useState<WaterMass[]>([
     {
@@ -108,6 +151,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   const [tsPubScale, setTsPubScale] = useState<number>(3);
   const [tsPubGridlines, setTsPubGridlines] = useState<boolean>(true);
   const [tsPubFont, setTsPubFont] = useState<'Arial' | 'Times New Roman' | 'Helvetica' | 'Courier New'>('Arial');
+  const [tsPubShowContourLabels, setTsPubShowContourLabels] = useState<boolean>(true);
+  const [tsPubShowWaterMassLabels, setTsPubShowWaterMassLabels] = useState<boolean>(true);
 
   // Build section data from hydroSamples and compute cumulative distance
   const sectionData = useMemo(() => {
@@ -128,15 +173,90 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       const sal = findValueByKeywords(h.values, ['salinity', 'sal']);
       const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c']);
       if (sal === undefined || temp === undefined || isNaN(sal) || isNaN(temp)) return null;
+      
+      const T = parseFloat(temp.toFixed(4));
+      const S = parseFloat(sal.toFixed(4));
+      
+      // Calculate OMP fractions if enabled and we have 3 endmembers
+      let f1 = 0, f2 = 0, f3 = 0;
+      let delta_tracer = 0;
+      let tracer_cons = 0;
+      let tracer_obs = 0;
+      
+      if (enableOmp && ompEndmembers.length >= 3) {
+        const em1 = ompEndmembers[0];
+        const em2 = ompEndmembers[1];
+        const em3 = ompEndmembers[2];
+        
+        const T1 = em1.t, S1 = em1.s;
+        const T2 = em2.t, S2 = em2.s;
+        const T3 = em3.t, S3 = em3.s;
+        
+        const D = T1 * (S2 - S3) - T2 * (S1 - S3) + T3 * (S1 - S2);
+        if (Math.abs(D) > 1e-6) {
+          const D1 = T * (S2 - S3) - T2 * (S - S3) + T3 * (S - S2);
+          const D2 = T1 * (S - S3) - T * (S1 - S3) + T3 * (S1 - S);
+          const D3 = T1 * (S2 - S) - T2 * (S1 - S) + T * (S1 - S2);
+          
+          let rawF1 = D1 / D;
+          let rawF2 = D2 / D;
+          let rawF3 = D3 / D;
+          
+          const cF1 = Math.max(0, Math.min(1, rawF1));
+          const cF2 = Math.max(0, Math.min(1, rawF2));
+          const cF3 = Math.max(0, Math.min(1, rawF3));
+          
+          const sum = cF1 + cF2 + cF3;
+          if (sum > 0) {
+            f1 = cF1 / sum;
+            f2 = cF2 / sum;
+            f3 = cF3 / sum;
+          } else {
+            f1 = 1 / 3; f2 = 1 / 3; f3 = 1 / 3;
+          }
+        } else {
+          f1 = 1 / 3; f2 = 1 / 3; f3 = 1 / 3;
+        }
+        
+        // Find tracer value
+        const tVal = h.values[selectedOmpTracer] !== undefined ? h.values[selectedOmpTracer] : findValueByKeywords(h.values, [selectedOmpTracer.toLowerCase()]);
+        if (tVal !== undefined && !isNaN(tVal)) {
+          tracer_obs = tVal;
+          tracer_cons = f1 * em1.tracerVal + f2 * em2.tracerVal + f3 * em3.tracerVal;
+          delta_tracer = parseFloat((tracer_obs - tracer_cons).toFixed(4));
+        }
+      }
+
       return {
         station: h.station,
         longitude: h.longitude,
         latitude: h.latitude,
         depth: h.depth,
-        temperature: parseFloat(temp.toFixed(4)),
-        salinity: parseFloat(sal.toFixed(4)),
+        temperature: T,
+        salinity: S,
+        values: h.values,
+        f1,
+        f2,
+        f3,
+        delta_tracer,
+        tracer_cons,
+        tracer_obs
       };
-    }).filter(Boolean) as { station: string; longitude: number; latitude: number; depth: number; temperature: number; salinity: number }[];
+    }).filter(Boolean) as { 
+      station: string; 
+      longitude: number; 
+      latitude: number; 
+      depth: number; 
+      temperature: number; 
+      salinity: number; 
+      values: Record<string, number>;
+      f1: number;
+      f2: number;
+      f3: number;
+      delta_tracer: number;
+      tracer_cons: number;
+      tracer_obs: number;
+    }[];
 
     // Extract unique stations
     const stationMap = new Map<string, { longitude: number; latitude: number }>();
@@ -190,7 +310,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       distance: distances.get(d.station) || 0,
       botDepth: stationBottomDepths.get(d.station) || d.depth
     }));
-  }, [hydroSamples]);
+  }, [hydroSamples, enableOmp, selectedOmpTracer, ompEndmembers]);
 
   // Extract numbers for limits
   const salMinVal = parseFloat(tsPubSalMin) || 33.0;
@@ -236,6 +356,25 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       r = Math.round(255 - s * 127); g = 0; b = 0;
     }
     return [r, g, b];
+  };
+
+  const getDivergentColor = (v: number, minVal: number, maxVal: number): [number, number, number] => {
+    const absMax = Math.max(Math.abs(minVal), Math.abs(maxVal)) || 1;
+    const t = Math.max(-1, Math.min(1, v / absMax));
+    
+    if (t < 0) {
+      const pct = 1 + t;
+      const r = Math.round(255 * pct + 30 * (1 - pct));
+      const g = Math.round(255 * pct + 100 * (1 - pct));
+      const b = 255;
+      return [r, g, b];
+    } else {
+      const pct = 1 - t;
+      const r = 255;
+      const g = Math.round(255 * pct + 100 * (1 - pct));
+      const b = Math.round(255 * pct + 30 * (1 - pct));
+      return [r, g, b];
+    }
   };
 
   // Render function for Canvas drawing
@@ -408,6 +547,26 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       });
 
       // Draw Scatter Points
+      const getStationNumber = (stationName: string): number => {
+        const num = parseInt(stationName.replace(/[^0-9]/g, ''), 10);
+        return isNaN(num) ? 0 : num;
+      };
+
+      const stationLonMap = new Map<string, number>();
+      hydroSamples.forEach(h => {
+        if (!stationLonMap.has(h.station)) {
+          stationLonMap.set(h.station, h.longitude);
+        }
+      });
+
+      const stationNumbers = tsData.map(d => getStationNumber(d.station));
+      const minStation = stationNumbers.length > 0 ? Math.min(...stationNumbers) : 0;
+      const maxStation = stationNumbers.length > 0 ? Math.max(...stationNumbers) : 1;
+
+      const lons = tsData.map(d => stationLonMap.get(d.station) ?? 0);
+      const minLon = lons.length > 0 ? Math.min(...lons) : 0;
+      const maxLon = lons.length > 0 ? Math.max(...lons) : 1;
+
       tsData.forEach(d => {
         if (d.salinity < salMinVal || d.salinity > salMaxVal || d.temperature < tempMinVal || d.temperature > tempMaxVal) return;
 
@@ -417,6 +576,16 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         let ptColor = '#ea580c';
         if (tsPubColorMode === 'depth-gradient') {
           const pct = d.depth / depthMaxVal;
+          const [r, g, b] = getJetColor(pct);
+          ptColor = `rgb(${r},${g},${b})`;
+        } else if (tsPubColorMode === 'station-gradient') {
+          const val = getStationNumber(d.station);
+          const pct = (val - minStation) / (maxStation - minStation || 1);
+          const [r, g, b] = getJetColor(pct);
+          ptColor = `rgb(${r},${g},${b})`;
+        } else if (tsPubColorMode === 'longitude-gradient') {
+          const ptLon = stationLonMap.get(d.station) ?? 0;
+          const pct = (ptLon - minLon) / (maxLon - minLon || 1);
           const [r, g, b] = getJetColor(pct);
           ptColor = `rgb(${r},${g},${b})`;
         } else if (tsPubColorMode === 'depth-group') {
@@ -447,12 +616,12 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       ctx.fillStyle = '#000000';
       ctx.font = `bold ${11 * dpr}px ${fontFamily}`;
       ctx.textAlign = 'center';
-      ctx.fillText('Salinity (psu)', plotX + plotW / 2, canvasH - 24 * dpr);
+      ctx.fillText('Practical Salinity (psu)', plotX + plotW / 2, canvasH - 24 * dpr);
 
       ctx.save();
       ctx.translate(22 * dpr, plotY + plotH / 2);
       ctx.rotate(-Math.PI / 2);
-      ctx.fillText('Potential Temperature (°C)', 0, 0);
+      ctx.fillText('Potential Temperature (θ, °C)', 0, 0);
       ctx.restore();
 
       ctx.font = `${9 * dpr}px ${fontFamily}`;
@@ -496,7 +665,11 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       }
 
       // T-S Continuous Colorbar
-      if (tsPubColorMode === 'depth-gradient') {
+      if (
+        tsPubColorMode === 'depth-gradient' ||
+        tsPubColorMode === 'station-gradient' ||
+        tsPubColorMode === 'longitude-gradient'
+      ) {
         const cbW = 12 * dpr;
         const cbH = plotH;
         const cbX = plotX + plotW + 15 * dpr;
@@ -517,8 +690,23 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         ctx.font = `${9 * dpr}px ${fontFamily}`;
         ctx.textAlign = 'left';
         const cbTicks = 5;
+
+        let cbMin = 0;
+        let cbMax = depthMaxVal;
+        let cbLabel = 'Depth (m)';
+
+        if (tsPubColorMode === 'station-gradient') {
+          cbMin = minStation;
+          cbMax = maxStation;
+          cbLabel = 'Station Number';
+        } else if (tsPubColorMode === 'longitude-gradient') {
+          cbMin = minLon;
+          cbMax = maxLon;
+          cbLabel = 'Longitude (°E)';
+        }
+
         for (let i = 0; i <= cbTicks; i++) {
-          const val = (i / cbTicks) * depthMaxVal;
+          const val = cbMin + (i / cbTicks) * (cbMax - cbMin);
           const py = cbY + cbH - (i / cbTicks) * cbH;
 
           ctx.beginPath();
@@ -527,7 +715,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           ctx.strokeStyle = '#000000';
           ctx.stroke();
 
-          ctx.fillText(`${Math.round(val)}`, cbX + cbW + 6 * dpr, py + 3 * dpr);
+          const formatVal = tsPubColorMode === 'longitude-gradient' ? val.toFixed(1) : Math.round(val).toString();
+          ctx.fillText(formatVal, cbX + cbW + 6 * dpr, py + 3 * dpr);
         }
 
         ctx.save();
@@ -535,7 +724,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         ctx.rotate(-Math.PI / 2);
         ctx.font = `bold ${9.5 * dpr}px ${fontFamily}`;
         ctx.textAlign = 'center';
-        ctx.fillText('Depth (m)', 0, 0);
+        ctx.fillText(cbLabel, 0, 0);
         ctx.restore();
       }
     }
@@ -561,6 +750,9 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         const valRange = valMax - valMin || 1;
 
         const getValColor = (v: number): [number, number, number] => {
+          if (valKey === 'delta_tracer') {
+            return getDivergentColor(v, valMin, valMax);
+          }
           const t = (v - valMin) / valRange;
           return getJetColor(t);
         };
@@ -643,6 +835,11 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         }
 
         // 2. Draw Initial Colored Grid background
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(plotX, plotY, plotW, plotH);
+        ctx.clip();
+
         for (let row = 0; row < gridRows; row++) {
           for (let col = 0; col < gridCols; col++) {
             const mask = cellMask[row * gridCols + col];
@@ -660,22 +857,74 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         }
 
         // 3. Draw Contour lines using d3-contour
-        const contourStep = tsSectionParam === 'temperature' ? 0.5 : 0.1;
+        let contourStep = tsSectionParam === 'temperature' ? 0.5 : 0.1;
+        if (tsSectionParam === 'delta_tracer') {
+          const absMax = Math.max(Math.abs(valMin), Math.abs(valMax)) || 1;
+          const rawStep = absMax / 5;
+          if (rawStep < 0.1) contourStep = 0.05;
+          else if (rawStep < 0.2) contourStep = 0.1;
+          else if (rawStep < 0.5) contourStep = 0.2;
+          else if (rawStep < 1) contourStep = 0.5;
+          else if (rawStep < 2) contourStep = 1;
+          else if (rawStep < 5) contourStep = 2;
+          else if (rawStep < 10) contourStep = 5;
+          else contourStep = 10;
+        }
         const startVal = Math.ceil(valMin / contourStep) * contourStep;
         const thresholds: number[] = [];
         for (let v = startVal; v <= valMax; v += contourStep) {
           thresholds.push(v);
         }
 
+        // Apply grid smoothing to get clean, smooth contour curves
+        const smoothGrid = (data: Float32Array, cols: number, rows: number, passes: number = 2) => {
+          let current = new Float32Array(data);
+          let next = new Float32Array(data.length);
+          for (let p = 0; p < passes; p++) {
+            for (let r = 0; r < rows; r++) {
+              for (let c = 0; c < cols; c++) {
+                const centerIdx = r * cols + c;
+                if (cellMask[centerIdx] === 1) {
+                  next[centerIdx] = current[centerIdx];
+                  continue;
+                }
+                let sum = 0;
+                let count = 0;
+                for (let dr = -1; dr <= 1; dr++) {
+                  for (let dc = -1; dc <= 1; dc++) {
+                    const nr = r + dr;
+                    const nc = c + dc;
+                    if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+                      const nIdx = nr * cols + nc;
+                      if (cellMask[nIdx] !== 1) {
+                        const weight = (dr === 0 && dc === 0) ? 2 : 1;
+                        sum += current[nIdx] * weight;
+                        count += weight;
+                      }
+                    }
+                  }
+                }
+                next[centerIdx] = count > 0 ? sum / count : current[centerIdx];
+              }
+            }
+            current.set(next);
+          }
+          return current;
+        };
+
+        const smoothedGridData = smoothGrid(gridData, gridCols, gridRows, 2);
+
         try {
           const contourGenerator = contours()
             .size([gridCols, gridRows])
             .thresholds(thresholds);
-          const contourPolygons = contourGenerator(Array.from(gridData));
+          const contourPolygons = contourGenerator(Array.from(smoothedGridData));
 
           ctx.save();
           ctx.strokeStyle = 'rgba(0,0,0,0.7)';
           ctx.lineWidth = 0.8 * dpr;
+
+          const placedLabels: { x: number; y: number }[] = [];
 
           contourPolygons.forEach(polygon => {
             const val = polygon.value;
@@ -692,26 +941,38 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
                 });
                 ctx.stroke();
 
-                if (coords.length > 15) {
+                if (coords.length > 35) {
                   const labelIdx = Math.floor(coords.length * 0.45);
                   const labelPt = coords[labelIdx];
-                  const lx = plotX + (labelPt[0] / (gridCols - 1)) * plotW;
-                  const ly = plotY + (labelPt[1] / (gridRows - 1)) * plotH;
+                  const gridX = labelPt[0];
+                  const gridY = labelPt[1];
+
+                  // Filter out labels that are too close to the borders of the plot
+                  if (gridX < 5 || gridX > gridCols - 6 || gridY < 4 || gridY > gridRows - 5) {
+                    return;
+                  }
+
+                  const lx = plotX + (gridX / (gridCols - 1)) * plotW;
+                  const ly = plotY + (gridY / (gridRows - 1)) * plotH;
                   
                   // Check if label coordinates are inside masked regions
-                  const cCol = Math.max(0, Math.min(gridCols - 1, Math.floor(labelPt[0])));
-                  const cRow = Math.max(0, Math.min(gridRows - 1, Math.floor(labelPt[1])));
+                  const cCol = Math.max(0, Math.min(gridCols - 1, Math.floor(gridX)));
+                  const cRow = Math.max(0, Math.min(gridRows - 1, Math.floor(gridY)));
                   if (cellMask[cRow * gridCols + cCol] === 0) {
-                    ctx.save();
-                    ctx.font = `600 ${8 * dpr}px ${fontFamily}`;
-                    ctx.fillStyle = '#000000';
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.lineWidth = 2 * dpr;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.strokeText(val.toFixed(1), lx, ly);
-                    ctx.fillText(val.toFixed(1), lx, ly);
-                    ctx.restore();
+                    // Prevent overlapping labels
+                    const isOverlap = placedLabels.some(l => Math.hypot(lx - l.x, ly - l.y) < 45 * dpr);
+                    if (isOverlap) return;
+                    placedLabels.push({ x: lx, y: ly });
+
+                    if (tsPubShowContourLabels) {
+                      ctx.save();
+                      ctx.font = `600 ${8 * dpr}px ${fontFamily}`;
+                      ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                      ctx.textAlign = 'center';
+                      ctx.textBaseline = 'middle';
+                      ctx.fillText(val.toFixed(1), lx, ly);
+                      ctx.restore();
+                    }
                   }
                 }
               });
@@ -792,19 +1053,30 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           return 0;
         };
 
+        // Draw measurement points with thin-out filter and smaller size to prevent cluttered blobs
+        const lastDrawnYByStation: { [station: string]: number } = {};
         sectionData.forEach(d => {
           if (d.depth > depthMaxVal) return;
           const px = plotX + ((d[xKey] - xMin) / (xMax - xMin || 1)) * plotW;
           const py = plotY + (d.depth / depthMaxVal) * plotH;
 
+          // Thin out dots: skip if another dot was drawn within 7px vertically on the same station cast
+          const lastY = lastDrawnYByStation[d.station];
+          if (lastY !== undefined && Math.abs(py - lastY) < 7 * dpr) {
+            return;
+          }
+          lastDrawnYByStation[d.station] = py;
+
           ctx.beginPath();
-          ctx.arc(px, py, 2.5 * dpr, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          ctx.arc(px, py, 1.5 * dpr, 0, Math.PI * 2); // smaller radius (1.5 instead of 2.5)
+          ctx.fillStyle = 'rgba(255,255,255,0.7)'; // semi-transparent
           ctx.fill();
-          ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-          ctx.lineWidth = 0.5 * dpr;
+          ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+          ctx.lineWidth = 0.4 * dpr;
           ctx.stroke();
         });
+
+        ctx.restore(); // Restore from grid/contour clipping
 
         tsPubAnnotations.forEach(ann => {
           const projX = getProjectedX(ann.x);
@@ -823,6 +1095,136 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           ctx.fillText(ann.text, px, py);
           ctx.restore();
         });
+
+        // Draw Large Dynamics Annotations for the South Indian Ocean Transect
+        if (tsSectionAxis === 'longitude' && xMin < 50 && xMax > 100) {
+          const getWaterMassCentroid = (
+            wm: typeof tsPubWaterMasses[0],
+            minDepth: number = 0,
+            maxDepth: number = depthMaxVal,
+            minTemp?: number,
+            maxTemp?: number
+          ) => {
+            let sumX = 0;
+            let sumDepth = 0;
+            let count = 0;
+
+            sectionData.forEach(d => {
+              if (d.depth >= minDepth && d.depth <= maxDepth) {
+                const tMin = minTemp !== undefined ? minTemp : wm.tMin;
+                const tMax = maxTemp !== undefined ? maxTemp : wm.tMax;
+                if (
+                  d.temperature >= tMin &&
+                  d.temperature <= tMax &&
+                  d.salinity >= wm.sMin &&
+                  d.salinity <= wm.sMax
+                ) {
+                  sumX += d[xKey];
+                  sumDepth += d.depth;
+                  count++;
+                }
+              }
+            });
+
+            if (count >= 3) {
+              return { x: sumX / count, depth: sumDepth / count };
+            }
+            return null;
+          };
+
+          const stuwWm = tsPubWaterMasses.find(w => w.id.toLowerCase() === 'stuw' || w.name.toUpperCase().includes('STUW'));
+          const aaiwWm = tsPubWaterMasses.find(w => w.id.toLowerCase() === 'aaiw' || w.name.toUpperCase().includes('AAIW'));
+
+          if (tsPubShowWaterMassLabels) {
+            if (stuwWm) {
+              // Constrain STUW calculation to the shallow subsurface layer (< 250m)
+              const centroid = getWaterMassCentroid(stuwWm, 0, 250);
+              if (centroid && centroid.x >= xMin && centroid.x <= xMax && centroid.depth <= depthMaxVal) {
+                const px = plotX + ((centroid.x - xMin) / (xMax - xMin || 1)) * plotW;
+                const py = plotY + (centroid.depth / depthMaxVal) * plotH;
+                const labelText = 'Subtropical Subsurface Water (STUW)';
+
+                ctx.save();
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `italic bold ${10.5 * dpr}px ${fontFamily}`;
+                ctx.fillStyle = '#000000'; // Pure Bold Black
+
+                const textWidth = ctx.measureText(labelText).width;
+                let adjustedPx = px;
+                if (px + textWidth / 2 > plotX + plotW - 6 * dpr) {
+                  adjustedPx = plotX + plotW - textWidth / 2 - 6 * dpr;
+                }
+                if (adjustedPx - textWidth / 2 < plotX + 6 * dpr) {
+                  adjustedPx = plotX + textWidth / 2 + 6 * dpr;
+                }
+
+                ctx.fillText(labelText, adjustedPx, py);
+                ctx.restore();
+              }
+            }
+
+            // Draw Leeuwin Current Inflow separately: narrow boundary current at Australia's west coast (~115°E), shallow (<150m)
+            const lcPoints = sectionData.filter(d => d.longitude >= 110 && d.depth <= 150);
+            if (lcPoints.length >= 2) {
+              const sumX = lcPoints.reduce((sum, d) => sum + d[xKey], 0);
+              const sumDepth = lcPoints.reduce((sum, d) => sum + d.depth, 0);
+              const lcCentroid = { x: sumX / lcPoints.length, depth: sumDepth / lcPoints.length };
+
+              if (lcCentroid.x >= xMin && lcCentroid.x <= xMax && lcCentroid.depth <= depthMaxVal) {
+                const px = plotX + ((lcCentroid.x - xMin) / (xMax - xMin || 1)) * plotW;
+                const py = plotY + (lcCentroid.depth / depthMaxVal) * plotH;
+                const labelText = 'Leeuwin Current Inflow';
+
+                ctx.save();
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `italic bold ${10.5 * dpr}px ${fontFamily}`;
+                ctx.fillStyle = '#000000'; // Pure Bold Black
+
+                const textWidth = ctx.measureText(labelText).width;
+                let adjustedPx = px;
+                if (px + textWidth / 2 > plotX + plotW - 6 * dpr) {
+                  adjustedPx = plotX + plotW - textWidth / 2 - 6 * dpr;
+                }
+                if (adjustedPx - textWidth / 2 < plotX + 6 * dpr) {
+                  adjustedPx = plotX + textWidth / 2 + 6 * dpr;
+                }
+
+                ctx.fillText(labelText, adjustedPx, py);
+                ctx.restore();
+              }
+            }
+
+            if (aaiwWm) {
+              // Constrain AAIW calculation to the deep intermediate layer (800m - 1200m) and its physical temperature core (3.0°C - 6.5°C)
+              const centroid = getWaterMassCentroid(aaiwWm, 800, 1200, 3.0, 6.5);
+              if (centroid && centroid.x >= xMin && centroid.x <= xMax && centroid.depth <= depthMaxVal) {
+                const px = plotX + ((centroid.x - xMin) / (xMax - xMin || 1)) * plotW;
+                const py = plotY + (centroid.depth / depthMaxVal) * plotH;
+                const labelText = 'Antarctic Intermediate Water (AAIW)';
+
+                ctx.save();
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.font = `italic bold ${10.5 * dpr}px ${fontFamily}`;
+                ctx.fillStyle = '#000000'; // Pure Bold Black
+
+                const textWidth = ctx.measureText(labelText).width;
+                let adjustedPx = px;
+                if (px + textWidth / 2 > plotX + plotW - 6 * dpr) {
+                  adjustedPx = plotX + plotW - textWidth / 2 - 6 * dpr;
+                }
+                if (adjustedPx - textWidth / 2 < plotX + 6 * dpr) {
+                  adjustedPx = plotX + textWidth / 2 + 6 * dpr;
+                }
+
+                ctx.fillText(labelText, adjustedPx, py);
+                ctx.restore();
+              }
+            }
+          }
+        }
 
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 1.5 * dpr;
@@ -895,7 +1297,13 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
 
         for (let i = 0; i < cbH; i++) {
           const pct = 1 - i / (cbH - 1);
-          const [r, g, b] = getJetColor(pct);
+          let r = 0, g = 0, b = 0;
+          if (tsSectionParam === 'delta_tracer') {
+            const val = valMin + pct * valRange;
+            [r, g, b] = getDivergentColor(val, valMin, valMax);
+          } else {
+            [r, g, b] = getJetColor(pct);
+          }
           ctx.fillStyle = `rgb(${r},${g},${b})`;
           ctx.fillRect(cbX, cbY + i, cbW, 1);
         }
@@ -925,7 +1333,15 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         ctx.rotate(-Math.PI / 2);
         ctx.font = `bold ${9.5 * dpr}px ${fontFamily}`;
         ctx.textAlign = 'center';
-        ctx.fillText(tsSectionParam === 'temperature' ? 'Temperature (°C)' : 'Salinity (psu)', 0, 0);
+        ctx.fillText(
+          tsSectionParam === 'temperature'
+            ? 'Temperature (°C)'
+            : tsSectionParam === 'salinity'
+              ? 'Salinity (psu)'
+              : `Δ${selectedOmpTracer} (anomaly)`,
+          0,
+          0
+        );
         ctx.restore();
       }
     }
@@ -955,7 +1371,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
     }, [
       tsPubLayout, tsPubSalMin, tsPubSalMax, tsPubTempMin, tsPubTempMax, tsPubDepthMax,
       tsPubColorMode, tsPubWaterMasses, tsPubAnnotations, tsPubGridlines, tsPubFont,
-      tsSectionParam, tsSectionAxis, sectionData
+      tsSectionParam, tsSectionAxis, sectionData, enableOmp, selectedOmpTracer, ompEndmembers
     ]);
 
     return (
@@ -1012,6 +1428,11 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           ]
         }
       ]);
+      setOmpEndmembers([
+        { name: 'WW', s: 34.0, t: -1.5, tracerVal: 42 },
+        { name: 'TWW', s: 34.4, t: -1.2, tracerVal: 45 },
+        { name: 'CDW', s: 34.7, t: 1.0, tracerVal: 38 }
+      ]);
       setTsPubAnnotations([
         { id: '1', text: 'Winter water', x: -60.5, depth: 80, color: '#000000', fontSize: 11 },
         { id: '2', text: 'Circumpolar deep water', x: -60.8, depth: 500, color: '#000000', fontSize: 11 },
@@ -1024,10 +1445,15 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       setTsPubTempMax('22.0');
       setTsPubDepthMax('1200');
       setTsPubWaterMasses([
-        { id: 'stuw', name: 'STUW', sMin: 35.2, sMax: 35.8, tMin: 16.0, tMax: 20.0, color: '#0284c7', borderStyle: 'dashed' },
+        { id: 'stuw', name: 'STUW', sMin: 35.2, sMax: 35.8, tMin: 17.5, tMax: 22.0, color: '#0284c7', borderStyle: 'dashed' },
         { id: 'samw', name: 'SAMW', sMin: 34.2, sMax: 34.6, tMin: 5.5, tMax: 8.5, color: '#10b981', borderStyle: 'dashed' },
         { id: 'aaiw', name: 'AAIW', sMin: 34.0, sMax: 34.4, tMin: 3.0, tMax: 7.0, color: '#6366f1', borderStyle: 'dashed' },
         { id: 'cdw_nadw', name: 'CDW/NADW', sMin: 34.65, sMax: 34.85, tMin: 1.0, tMax: 2.5, color: '#1d4ed8', borderStyle: 'dashed' }
+      ]);
+      setOmpEndmembers([
+        { name: 'STUW', s: 35.5, t: 19.5, tracerVal: 75 },
+        { name: 'SAMW', s: 34.4, t: 7.0, tracerVal: 55 },
+        { name: 'AAIW', s: 34.2, t: 4.5, tracerVal: 48 }
       ]);
       setTsPubAnnotations([
         { id: '1', text: 'Subtropical Underwater', x: 12.0, depth: 150, color: '#000000', fontSize: 11 },
@@ -1035,6 +1461,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       ]);
     } else {
       setTsPubWaterMasses([]);
+      setOmpEndmembers([]);
       setTsPubAnnotations([]);
     }
   };
@@ -1201,9 +1628,11 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
             onChange={e => setTsPubColorMode(e.target.value as any)}
             style={{ width: '100%', padding: '6px 10px', fontSize: '11px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
           >
-            <option value="depth-gradient">连续深度渐变 (Jet Colorbar)</option>
+            <option value="depth-gradient">连续深度渐变 (Depth Jet)</option>
+            <option value="station-gradient">采样站位渐变 (Station Number)</option>
+            <option value="longitude-gradient">经度渐变 (Longitude °E)</option>
             <option value="depth-group">表中深三层水分组</option>
-            <option value="station">按采样站位区分</option>
+            <option value="station">按采样站位区分 (定性 HSL)</option>
             <option value="uniform">学术单色 (深灰色)</option>
           </select>
         </div>
@@ -1220,6 +1649,9 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
               >
                 <option value="temperature">温度 (°C)</option>
                 <option value="salinity">盐度 (psu)</option>
+                {enableOmp && (
+                  <option value="delta_tracer">生化残差 Δ{selectedOmpTracer}</option>
+                )}
               </select>
             </div>
             <div>
@@ -1265,6 +1697,22 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
                 style={{ cursor: 'pointer' }}
               />
               <label htmlFor="gridCheckbox" style={{ fontSize: '11px', color: '#475569', cursor: 'pointer' }}>显示等密度网格</label>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <input
+                type="checkbox" id="showContourLabelsCheckbox" checked={tsPubShowContourLabels} onChange={e => setTsPubShowContourLabels(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              <label htmlFor="showContourLabelsCheckbox" style={{ fontSize: '11px', color: '#475569', cursor: 'pointer' }}>显示等值线数值</label>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <input
+                type="checkbox" id="showWaterMassLabelsCheckbox" checked={tsPubShowWaterMassLabels} onChange={e => setTsPubShowWaterMassLabels(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              <label htmlFor="showWaterMassLabelsCheckbox" style={{ fontSize: '11px', color: '#475569', cursor: 'pointer' }}>显示水团名称</label>
             </div>
           </div>
         </div>
@@ -1413,6 +1861,242 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           </div>
         ) : (
           <LiveStudioPreview />
+        )}
+
+        {/* OMP Analysis Panel */}
+        {tsData.length > 0 && (
+          <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px', margin: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: '4px', height: '18px', background: '#10b981', borderRadius: '2px' }} />
+                <h4 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0, color: '#0f172a' }}>水团混合与生化残差量化分析 (OMP & Δ Analysis)</h4>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  id="enableOmpCheckbox"
+                  checked={enableOmp}
+                  onChange={e => {
+                    setEnableOmp(e.target.checked);
+                    if (!e.target.checked && tsSectionParam === 'delta_tracer') {
+                      setTsSectionParam('temperature');
+                    }
+                  }}
+                  style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                />
+                <label htmlFor="enableOmpCheckbox" style={{ fontSize: '13px', fontWeight: 'bold', color: '#1e293b', cursor: 'pointer' }}>
+                  开启端元混合分析
+                </label>
+              </div>
+            </div>
+
+            {enableOmp && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* Inputs for selected tracer and endmembers */}
+                <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '20px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#475569' }}>待分析非保守参数 (Tracer)</label>
+                    <select
+                      value={selectedOmpTracer}
+                      onChange={e => setSelectedOmpTracer(e.target.value)}
+                      style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', border: '1px solid #cbd5e1', background: '#ffffff' }}
+                    >
+                      {availableTracers.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => {
+                        if (tsPubWaterMasses.length >= 3) {
+                          const newEms = tsPubWaterMasses.slice(0, 3).map((wm, idx) => ({
+                            name: wm.name,
+                            s: (wm.sMin + wm.sMax) / 2,
+                            t: (wm.tMin + wm.tMax) / 2,
+                            tracerVal: idx === 0 ? 40 : idx === 1 ? 50 : 35
+                          }));
+                          setOmpEndmembers(newEms);
+                        } else {
+                          alert('需要当前列表中至少存在 3 个已定义的水团矩形框才可以自动填充。');
+                        }
+                      }}
+                      style={{ padding: '6px 12px', fontSize: '11px', fontWeight: 'bold', color: '#0369a1', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '6px', cursor: 'pointer' }}
+                    >
+                      从水团矩形框自动获取端元 T/S
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3 Endmembers config inputs */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                  {ompEndmembers.map((em, idx) => (
+                    <div key={idx} style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#64748b' }}>端元 {idx + 1} ({em.name || `EM${idx + 1}`})</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                        <div>
+                          <label style={{ fontSize: '10px', color: '#475569', display: 'block' }}>名称 (Name)</label>
+                          <input
+                            type="text"
+                            value={em.name}
+                            onChange={e => {
+                              const next = [...ompEndmembers];
+                              next[idx].name = e.target.value;
+                              setOmpEndmembers(next);
+                            }}
+                            style={{ width: '100%', padding: '3px 6px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                          />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                          <div>
+                            <label style={{ fontSize: '10px', color: '#475569', display: 'block' }}>盐度 (S)</label>
+                            <input
+                              type="number"
+                              step="0.05"
+                              value={em.s}
+                              onChange={e => {
+                                const next = [...ompEndmembers];
+                                next[idx].s = parseFloat(e.target.value) || 0;
+                                setOmpEndmembers(next);
+                              }}
+                              style={{ width: '100%', padding: '3px 6px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '10px', color: '#475569', display: 'block' }}>温度 (T, °C)</label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={em.t}
+                              onChange={e => {
+                                const next = [...ompEndmembers];
+                                next[idx].t = parseFloat(e.target.value) || 0;
+                                setOmpEndmembers(next);
+                              }}
+                              style={{ width: '100%', padding: '3px 6px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '10px', color: '#475569', display: 'block' }}>源区初值 ({selectedOmpTracer} Initial)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={em.tracerVal}
+                            onChange={e => {
+                              const next = [...ompEndmembers];
+                              next[idx].tracerVal = parseFloat(e.target.value) || 0;
+                              setOmpEndmembers(next);
+                            }}
+                            style={{ width: '100%', padding: '3px 6px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Summary Metrics */}
+                {(() => {
+                  const validData = sectionData.filter(d => d.tracer_obs > 0);
+                  if (validData.length === 0) return null;
+                  const avgF1 = validData.reduce((acc, d) => acc + d.f1, 0) / validData.length;
+                  const avgF2 = validData.reduce((acc, d) => acc + d.f2, 0) / validData.length;
+                  const avgF3 = validData.reduce((acc, d) => acc + d.f3, 0) / validData.length;
+                  const avgDelta = validData.reduce((acc, d) => acc + d.delta_tracer, 0) / validData.length;
+
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px', background: '#f0fdf4', padding: '12px', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>平均 {ompEndmembers[0]?.name || 'EM1'} %</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#14532d' }}>{(avgF1 * 100).toFixed(1)}%</div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>平均 {ompEndmembers[1]?.name || 'EM2'} %</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#14532d' }}>{(avgF2 * 100).toFixed(1)}%</div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>平均 {ompEndmembers[2]?.name || 'EM3'} %</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#14532d' }}>{(avgF3 * 100).toFixed(1)}%</div>
+                      </div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>平均 Δ{selectedOmpTracer}</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: avgDelta < 0 ? '#b91c1c' : '#1e3a8a' }}>
+                          {avgDelta > 0 ? '+' : ''}{avgDelta.toFixed(2)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Quantitative Results Table */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#475569' }}>各采样点解算详情 ({sectionData.length} 个观测点)</span>
+                    <button
+                      onClick={() => {
+                        const headers = `Station,Depth,Temp,Sal,${ompEndmembers[0]?.name || 'f1'},${ompEndmembers[1]?.name || 'f2'},${ompEndmembers[2]?.name || 'f3'},${selectedOmpTracer}_obs,${selectedOmpTracer}_cons,delta_${selectedOmpTracer}\n`;
+                        const rows = sectionData.map(d => 
+                          `${d.station},${d.depth},${d.temperature},${d.salinity},${(d.f1*100).toFixed(2)}%,${(d.f2*100).toFixed(2)}%,${(d.f3*100).toFixed(2)}%,${d.tracer_obs},${d.tracer_cons.toFixed(2)},${d.delta_tracer.toFixed(2)}`
+                        ).join('\n');
+                        const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8;' });
+                        const link = document.createElement('a');
+                        link.href = URL.createObjectURL(blob);
+                        link.download = `OMP_Mixing_Delta_${selectedOmpTracer}_Analysis.csv`;
+                        link.click();
+                      }}
+                      style={{ padding: '4px 8px', fontSize: '11px', background: '#0284c7', color: '#ffffff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                    >
+                      导出完整解算数据 (CSV)
+                    </button>
+                  </div>
+
+                  <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid #cbd5e1', borderRadius: '6px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', textAlign: 'left' }}>
+                      <thead style={{ background: '#f1f5f9', position: 'sticky', top: 0, color: '#334155' }}>
+                        <tr>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>站位</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>深度(m)</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>T / S</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>{ompEndmembers[0]?.name || 'f1'}</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>{ompEndmembers[1]?.name || 'f2'}</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>{ompEndmembers[2]?.name || 'f3'}</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>实测 {selectedOmpTracer}</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>保守 {selectedOmpTracer}</th>
+                          <th style={{ padding: '6px 8px', borderBottom: '1px solid #cbd5e1' }}>生化异常 Δ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sectionData.map((d, index) => {
+                          const bg = d.delta_tracer < 0 
+                            ? 'rgba(239, 68, 68, 0.05)'
+                            : d.delta_tracer > 0 
+                              ? 'rgba(59, 130, 246, 0.05)'
+                              : 'transparent';
+
+                          return (
+                            <tr key={index} style={{ background: bg, borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '6px 8px' }}>{d.station}</td>
+                              <td style={{ padding: '6px 8px' }}>{d.depth}</td>
+                              <td style={{ padding: '6px 8px', color: '#64748b' }}>{d.temperature.toFixed(2)} / {d.salinity.toFixed(2)}</td>
+                              <td style={{ padding: '6px 8px', fontWeight: '500' }}>{(d.f1 * 100).toFixed(1)}%</td>
+                              <td style={{ padding: '6px 8px', fontWeight: '500' }}>{(d.f2 * 100).toFixed(1)}%</td>
+                              <td style={{ padding: '6px 8px', fontWeight: '500' }}>{(d.f3 * 100).toFixed(1)}%</td>
+                              <td style={{ padding: '6px 8px' }}>{d.tracer_obs > 0 ? d.tracer_obs.toFixed(2) : '-'}</td>
+                              <td style={{ padding: '6px 8px', color: '#64748b' }}>{d.tracer_obs > 0 ? d.tracer_cons.toFixed(2) : '-'}</td>
+                              <td style={{ padding: '6px 8px', fontWeight: 'bold', color: d.delta_tracer < 0 ? '#ef4444' : d.delta_tracer > 0 ? '#3b82f6' : '#334155' }}>
+                                {d.tracer_obs > 0 ? `${d.delta_tracer > 0 ? '+' : ''}${d.delta_tracer.toFixed(2)}` : '-'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
