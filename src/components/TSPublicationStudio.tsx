@@ -62,6 +62,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   const [tsPubDepthMax, setTsPubDepthMax] = useState<string>('800');
   const [tsPubColorMode, setTsPubColorMode] = useState<'depth-gradient' | 'depth-group' | 'station' | 'uniform' | 'station-gradient' | 'longitude-gradient'>('depth-gradient');
   const [tsPubPreset, setTsPubPreset] = useState<'antarctic' | 'indian' | 'custom'>('antarctic');
+  const [tsPubColormap, setTsPubColormap] = useState<'odv-rainbow' | 'jet' | 'viridis'>('odv-rainbow');
   
   const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity' | 'delta_tracer'>('temperature');
   const [tsSectionAxis, setTsSectionAxis] = useState<'longitude' | 'latitude' | 'distance'>('longitude');
@@ -319,6 +320,153 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   const tempMaxVal = parseFloat(tsPubTempMax) || 5.0;
   const depthMaxVal = parseFloat(tsPubDepthMax) || 800;
 
+  // Memoize heavy grid interpolation for the section plot
+  const sectionGridInfo = useMemo(() => {
+    if (!sectionData || sectionData.length === 0) return null;
+
+    const xKey = tsSectionAxis === 'distance' ? 'distance' : (tsSectionAxis === 'longitude' ? 'longitude' : 'latitude');
+    const valKey = tsSectionParam;
+
+    const xs = sectionData.map(d => d[xKey]);
+    const vals = sectionData.map(d => d[valKey]);
+
+    const xMin = Math.min(...xs);
+    const xMax = Math.max(...xs);
+    const valMin = Math.min(...vals);
+    const valMax = Math.max(...vals);
+    const valRange = valMax - valMin || 1;
+
+    const gridCols = 150;
+    const gridRows = 100;
+    const power = 2;
+
+    const gridData = new Float32Array(gridCols * gridRows);
+    const cellMask = new Uint8Array(gridCols * gridRows); // 0 = normal, 1 = seabed, 2 = distance masked
+
+    // Extract unique stations and bottom depths along the chosen X axis coordinate
+    const stationDepths: { x: number; botDepth: number }[] = [];
+    const seenStations = new Set<string>();
+    sectionData.forEach(d => {
+      if (!seenStations.has(d.station)) {
+        seenStations.add(d.station);
+        stationDepths.push({ x: d[xKey], botDepth: d.botDepth });
+      }
+    });
+    stationDepths.sort((a, b) => a.x - b.x);
+
+    const getBottomDepthAtX = (gx: number): number => {
+      if (stationDepths.length === 0) return depthMaxVal;
+      if (gx <= stationDepths[0].x) return stationDepths[0].botDepth;
+      if (gx >= stationDepths[stationDepths.length - 1].x) return stationDepths[stationDepths.length - 1].botDepth;
+      for (let i = 0; i < stationDepths.length - 1; i++) {
+        const p1 = stationDepths[i];
+        const p2 = stationDepths[i + 1];
+        if (gx >= p1.x && gx <= p2.x) {
+          const pct = (gx - p1.x) / (p2.x - p1.x || 1);
+          return p1.botDepth + pct * (p2.botDepth - p1.botDepth);
+        }
+      }
+      return depthMaxVal;
+    };
+
+    // 1. Grid Interpolation & Mask calculation
+    for (let row = 0; row < gridRows; row++) {
+      for (let col = 0; col < gridCols; col++) {
+        const gx = xMin + (col / (gridCols - 1)) * (xMax - xMin);
+        const gy = (row / (gridRows - 1)) * depthMaxVal;
+
+        // Seafloor check
+        const bottomDepth = getBottomDepthAtX(gx);
+        if (gy > bottomDepth) {
+          gridData[row * gridCols + col] = valMin;
+          cellMask[row * gridCols + col] = 1; // Seabed
+          continue;
+        }
+
+        let wSum = 0, vSum = 0, exact = false, exactV = 0;
+        let minDistSq = Infinity;
+        
+        for (let i = 0; i < sectionData.length; i++) {
+          // Stretch horizontally by scaling dx down (e.g. by 0.22), representing a horizontal search ellipse
+          const dx = ((sectionData[i][xKey] - gx) / Math.max(xMax - xMin, 0.001)) * 0.22;
+          const dy = (sectionData[i].depth - gy) / depthMaxVal;
+          const dist2 = dx * dx + dy * dy;
+          
+          if (dist2 < minDistSq) {
+            minDistSq = dist2;
+          }
+          
+          if (dist2 < 1e-12) { exact = true; exactV = sectionData[i][valKey]; break; }
+          const w = 1 / Math.pow(dist2, power / 2);
+          wSum += w; vSum += w * sectionData[i][valKey];
+        }
+
+        const interpVal = exact ? exactV : (wSum > 0 ? vSum / wSum : valMin);
+        gridData[row * gridCols + col] = interpVal;
+
+        if (minDistSq > 0.08) {
+          cellMask[row * gridCols + col] = 2; // Distance masked
+        } else {
+          cellMask[row * gridCols + col] = 0; // Normal
+        }
+      }
+    }
+
+    // Apply grid smoothing to get clean, smooth contour curves
+    const smoothGrid = (data: Float32Array, cols: number, rows: number, passes: number = 2) => {
+      let current = new Float32Array(data);
+      let next = new Float32Array(data.length);
+      for (let p = 0; p < passes; p++) {
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const centerIdx = r * cols + c;
+            if (cellMask[centerIdx] === 1) {
+              next[centerIdx] = current[centerIdx];
+              continue;
+            }
+            let sum = 0;
+            let count = 0;
+            for (let dr = -1; dr <= 1; dr++) {
+              for (let dc = -1; dc <= 1; dc++) {
+                const nr = r + dr;
+                const nc = c + dc;
+                if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+                  const nIdx = nr * cols + nc;
+                  if (cellMask[nIdx] !== 1) {
+                    const weight = (dr === 0 && dc === 0) ? 2 : 1;
+                    sum += current[nIdx] * weight;
+                    count += weight;
+                  }
+                }
+              }
+            }
+            next[centerIdx] = count > 0 ? sum / count : current[centerIdx];
+          }
+        }
+        current.set(next);
+      }
+      return current;
+    };
+
+    const smoothedGridData = smoothGrid(gridData, gridCols, gridRows, 2);
+
+    return {
+      xKey,
+      valKey,
+      xMin,
+      xMax,
+      valMin,
+      valMax,
+      valRange,
+      gridCols,
+      gridRows,
+      gridData,
+      cellMask,
+      stationDepths,
+      smoothedGridData
+    };
+  }, [sectionData, tsSectionAxis, tsSectionParam, depthMaxVal]);
+
   // Bisection solver for density contours (sigma_theta)
   const solveTemp = (S: number, targetSigma: number): number => {
     let low = -2.0;
@@ -356,6 +504,65 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       r = Math.round(255 - s * 127); g = 0; b = 0;
     }
     return [r, g, b];
+  };
+
+  // ODV-style Rainbow colormap: Magenta -> Blue -> Cyan -> Green -> Yellow -> Orange -> Red
+  const getOdvRainbowColor = (t: number): [number, number, number] => {
+    const clamped = Math.max(0, Math.min(1, t));
+    const stops: { t: number; color: [number, number, number] }[] = [
+      { t: 0.0, color: [210, 50, 210] },
+      { t: 0.166, color: [0, 50, 255] },
+      { t: 0.333, color: [0, 200, 255] },
+      { t: 0.5, color: [0, 210, 0] },
+      { t: 0.666, color: [220, 220, 0] },
+      { t: 0.833, color: [255, 120, 0] },
+      { t: 1.0, color: [230, 0, 0] }
+    ];
+
+    for (let i = 0; i < stops.length - 1; i++) {
+      const s1 = stops[i];
+      const s2 = stops[i + 1];
+      if (clamped >= s1.t && clamped <= s2.t) {
+        const pct = (clamped - s1.t) / (s2.t - s1.t || 1);
+        const r = Math.round(s1.color[0] + pct * (s2.color[0] - s1.color[0]));
+        const g = Math.round(s1.color[1] + pct * (s2.color[1] - s1.color[1]));
+        const b = Math.round(s1.color[2] + pct * (s2.color[2] - s1.color[2]));
+        return [r, g, b];
+      }
+    }
+    return [230, 0, 0];
+  };
+
+  // Viridis colormap helper
+  const getViridisColor = (t: number): [number, number, number] => {
+    const clamped = Math.max(0, Math.min(1, t));
+    const stops: { t: number; color: [number, number, number] }[] = [
+      { t: 0.0, color: [68, 1, 84] },
+      { t: 0.25, color: [59, 82, 139] },
+      { t: 0.5, color: [33, 144, 140] },
+      { t: 0.75, color: [94, 201, 98] },
+      { t: 1.0, color: [253, 231, 37] }
+    ];
+
+    for (let i = 0; i < stops.length - 1; i++) {
+      const s1 = stops[i];
+      const s2 = stops[i + 1];
+      if (clamped >= s1.t && clamped <= s2.t) {
+        const pct = (clamped - s1.t) / (s2.t - s1.t || 1);
+        const r = Math.round(s1.color[0] + pct * (s2.color[0] - s1.color[0]));
+        const g = Math.round(s1.color[1] + pct * (s2.color[1] - s1.color[1]));
+        const b = Math.round(s1.color[2] + pct * (s2.color[2] - s1.color[2]));
+        return [r, g, b];
+      }
+    }
+    return [253, 231, 37];
+  };
+
+  // Main wrapper for colormap choice
+  const getColormapColor = (t: number): [number, number, number] => {
+    if (tsPubColormap === 'jet') return getJetColor(t);
+    if (tsPubColormap === 'viridis') return getViridisColor(t);
+    return getOdvRainbowColor(t);
   };
 
   const getDivergentColor = (v: number, minVal: number, maxVal: number): [number, number, number] => {
@@ -576,17 +783,17 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         let ptColor = '#ea580c';
         if (tsPubColorMode === 'depth-gradient') {
           const pct = d.depth / depthMaxVal;
-          const [r, g, b] = getJetColor(pct);
+          const [r, g, b] = getColormapColor(pct);
           ptColor = `rgb(${r},${g},${b})`;
         } else if (tsPubColorMode === 'station-gradient') {
           const val = getStationNumber(d.station);
           const pct = (val - minStation) / (maxStation - minStation || 1);
-          const [r, g, b] = getJetColor(pct);
+          const [r, g, b] = getColormapColor(pct);
           ptColor = `rgb(${r},${g},${b})`;
         } else if (tsPubColorMode === 'longitude-gradient') {
           const ptLon = stationLonMap.get(d.station) ?? 0;
           const pct = (ptLon - minLon) / (maxLon - minLon || 1);
-          const [r, g, b] = getJetColor(pct);
+          const [r, g, b] = getColormapColor(pct);
           ptColor = `rgb(${r},${g},${b})`;
         } else if (tsPubColorMode === 'depth-group') {
           if (d.depth < 200) ptColor = '#ea580c';
@@ -677,7 +884,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
 
         for (let i = 0; i < cbH; i++) {
           const pct = 1 - i / (cbH - 1);
-          const [r, g, b] = getJetColor(pct);
+          const [r, g, b] = getColormapColor(pct);
           ctx.fillStyle = `rgb(${r},${g},${b})`;
           ctx.fillRect(cbX, cbY + i, cbW, 1);
         }
@@ -736,103 +943,33 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       const plotX = marginLeft;
       const plotY = marginTop;
 
-      if (sectionData.length > 0) {
-        const xKey = tsSectionAxis === 'distance' ? 'distance' : (tsSectionAxis === 'longitude' ? 'longitude' : 'latitude');
-        const valKey = tsSectionParam;
-
-        const xs = sectionData.map(d => d[xKey]);
-        const vals = sectionData.map(d => d[valKey]);
-
-        const xMin = Math.min(...xs);
-        const xMax = Math.max(...xs);
-        const valMin = Math.min(...vals);
-        const valMax = Math.max(...vals);
-        const valRange = valMax - valMin || 1;
+      if (sectionData.length > 0 && sectionGridInfo) {
+        const {
+          xKey,
+          valKey,
+          xMin,
+          xMax,
+          valMin,
+          valMax,
+          valRange,
+          gridCols,
+          gridRows,
+          gridData,
+          cellMask,
+          stationDepths,
+          smoothedGridData
+        } = sectionGridInfo;
 
         const getValColor = (v: number): [number, number, number] => {
           if (valKey === 'delta_tracer') {
             return getDivergentColor(v, valMin, valMax);
           }
           const t = (v - valMin) / valRange;
-          return getJetColor(t);
+          return getColormapColor(t);
         };
 
-        const gridCols = 150;
-        const gridRows = 100;
-        const power = 2;
         const cellW = plotW / gridCols;
         const cellH = plotH / gridRows;
-
-        const gridData = new Float32Array(gridCols * gridRows);
-        const cellMask = new Uint8Array(gridCols * gridRows); // 0 = normal, 1 = seabed, 2 = distance masked
-
-        // Extract unique stations and bottom depths along the chosen X axis coordinate
-        const stationDepths: { x: number; botDepth: number }[] = [];
-        const seenStations = new Set<string>();
-        sectionData.forEach(d => {
-          if (!seenStations.has(d.station)) {
-            seenStations.add(d.station);
-            stationDepths.push({ x: d[xKey], botDepth: d.botDepth });
-          }
-        });
-        stationDepths.sort((a, b) => a.x - b.x);
-
-        const getBottomDepthAtX = (gx: number): number => {
-          if (stationDepths.length === 0) return depthMaxVal;
-          if (gx <= stationDepths[0].x) return stationDepths[0].botDepth;
-          if (gx >= stationDepths[stationDepths.length - 1].x) return stationDepths[stationDepths.length - 1].botDepth;
-          for (let i = 0; i < stationDepths.length - 1; i++) {
-            const p1 = stationDepths[i];
-            const p2 = stationDepths[i + 1];
-            if (gx >= p1.x && gx <= p2.x) {
-              const pct = (gx - p1.x) / (p2.x - p1.x || 1);
-              return p1.botDepth + pct * (p2.botDepth - p1.botDepth);
-            }
-          }
-          return depthMaxVal;
-        };
-
-        // 1. Grid Interpolation & Mask calculation
-        for (let row = 0; row < gridRows; row++) {
-          for (let col = 0; col < gridCols; col++) {
-            const gx = xMin + (col / (gridCols - 1)) * (xMax - xMin);
-            const gy = (row / (gridRows - 1)) * depthMaxVal;
-
-            // Seafloor check
-            const bottomDepth = getBottomDepthAtX(gx);
-            if (gy > bottomDepth) {
-              gridData[row * gridCols + col] = valMin;
-              cellMask[row * gridCols + col] = 1; // Seabed
-              continue;
-            }
-
-            let wSum = 0, vSum = 0, exact = false, exactV = 0;
-            let minDistSq = Infinity;
-            
-            for (let i = 0; i < sectionData.length; i++) {
-              const dx = (sectionData[i][xKey] - gx) / Math.max(xMax - xMin, 0.001);
-              const dy = (sectionData[i].depth - gy) / depthMaxVal;
-              const dist2 = dx * dx + dy * dy;
-              
-              if (dist2 < minDistSq) {
-                minDistSq = dist2;
-              }
-              
-              if (dist2 < 1e-12) { exact = true; exactV = sectionData[i][valKey]; break; }
-              const w = 1 / Math.pow(dist2, power / 2);
-              wSum += w; vSum += w * sectionData[i][valKey];
-            }
-
-            const interpVal = exact ? exactV : (wSum > 0 ? vSum / wSum : valMin);
-            gridData[row * gridCols + col] = interpVal;
-
-            if (minDistSq > 0.08) {
-              cellMask[row * gridCols + col] = 2; // Distance masked
-            } else {
-              cellMask[row * gridCols + col] = 0; // Normal
-            }
-          }
-        }
 
         // 2. Draw Initial Colored Grid background
         ctx.save();
@@ -857,8 +994,18 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         }
 
         // 3. Draw Contour lines using d3-contour
-        let contourStep = tsSectionParam === 'temperature' ? 0.5 : 0.1;
-        if (tsSectionParam === 'delta_tracer') {
+        let contourStep = 0.5;
+        if (tsSectionParam === 'temperature' || tsSectionParam === 'salinity') {
+          const rawStep = valRange / 12; // target around 12 major bands
+          if (rawStep < 0.05) contourStep = 0.02;
+          else if (rawStep < 0.1) contourStep = 0.05;
+          else if (rawStep < 0.25) contourStep = 0.1;
+          else if (rawStep < 0.5) contourStep = 0.25;
+          else if (rawStep < 1.0) contourStep = 0.5;
+          else if (rawStep < 2.0) contourStep = 1.0;
+          else if (rawStep < 5.0) contourStep = 2.0;
+          else contourStep = 5.0;
+        } else if (tsSectionParam === 'delta_tracer') {
           const absMax = Math.max(Math.abs(valMin), Math.abs(valMax)) || 1;
           const rawStep = absMax / 5;
           if (rawStep < 0.1) contourStep = 0.05;
@@ -875,44 +1022,6 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         for (let v = startVal; v <= valMax; v += contourStep) {
           thresholds.push(v);
         }
-
-        // Apply grid smoothing to get clean, smooth contour curves
-        const smoothGrid = (data: Float32Array, cols: number, rows: number, passes: number = 2) => {
-          let current = new Float32Array(data);
-          let next = new Float32Array(data.length);
-          for (let p = 0; p < passes; p++) {
-            for (let r = 0; r < rows; r++) {
-              for (let c = 0; c < cols; c++) {
-                const centerIdx = r * cols + c;
-                if (cellMask[centerIdx] === 1) {
-                  next[centerIdx] = current[centerIdx];
-                  continue;
-                }
-                let sum = 0;
-                let count = 0;
-                for (let dr = -1; dr <= 1; dr++) {
-                  for (let dc = -1; dc <= 1; dc++) {
-                    const nr = r + dr;
-                    const nc = c + dc;
-                    if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
-                      const nIdx = nr * cols + nc;
-                      if (cellMask[nIdx] !== 1) {
-                        const weight = (dr === 0 && dc === 0) ? 2 : 1;
-                        sum += current[nIdx] * weight;
-                        count += weight;
-                      }
-                    }
-                  }
-                }
-                next[centerIdx] = count > 0 ? sum / count : current[centerIdx];
-              }
-            }
-            current.set(next);
-          }
-          return current;
-        };
-
-        const smoothedGridData = smoothGrid(gridData, gridCols, gridRows, 2);
 
         try {
           const contourGenerator = contours()
@@ -1141,7 +1250,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
               const centroid = getWaterMassCentroid(stuwWm, 0, 250);
               if (centroid && centroid.x >= xMin && centroid.x <= xMax && centroid.depth <= depthMaxVal) {
                 const px = plotX + ((centroid.x - xMin) / (xMax - xMin || 1)) * plotW;
-                const py = plotY + (centroid.depth / depthMaxVal) * plotH;
+                // Place STUW slightly deeper (140m minimum) to vertically stack with Leeuwin Current Inflow
+                const py = plotY + (Math.max(140, centroid.depth) / depthMaxVal) * plotH;
                 const labelText = 'Subtropical Subsurface Water (STUW)';
 
                 ctx.save();
@@ -1173,7 +1283,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
 
               if (lcCentroid.x >= xMin && lcCentroid.x <= xMax && lcCentroid.depth <= depthMaxVal) {
                 const px = plotX + ((lcCentroid.x - xMin) / (xMax - xMin || 1)) * plotW;
-                const py = plotY + (lcCentroid.depth / depthMaxVal) * plotH;
+                // Place Leeuwin Current Inflow shallower (60m minimum)
+                const py = plotY + (Math.max(60, lcCentroid.depth) / depthMaxVal) * plotH;
                 const labelText = 'Leeuwin Current Inflow';
 
                 ctx.save();
@@ -1302,7 +1413,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
             const val = valMin + pct * valRange;
             [r, g, b] = getDivergentColor(val, valMin, valMax);
           } else {
-            [r, g, b] = getJetColor(pct);
+            [r, g, b] = getColormapColor(pct);
           }
           ctx.fillStyle = `rgb(${r},${g},${b})`;
           ctx.fillRect(cbX, cbY + i, cbW, 1);
@@ -1371,7 +1482,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
     }, [
       tsPubLayout, tsPubSalMin, tsPubSalMax, tsPubTempMin, tsPubTempMax, tsPubDepthMax,
       tsPubColorMode, tsPubWaterMasses, tsPubAnnotations, tsPubGridlines, tsPubFont,
-      tsSectionParam, tsSectionAxis, sectionData, enableOmp, selectedOmpTracer, ompEndmembers
+      tsSectionParam, tsSectionAxis, sectionData, enableOmp, selectedOmpTracer, ompEndmembers,
+      tsPubColormap, sectionGridInfo
     ]);
 
     return (
@@ -1628,12 +1740,26 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
             onChange={e => setTsPubColorMode(e.target.value as any)}
             style={{ width: '100%', padding: '6px 10px', fontSize: '11px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
           >
-            <option value="depth-gradient">连续深度渐变 (Depth Jet)</option>
+            <option value="depth-gradient">连续深度渐变 (Depth Gradient)</option>
             <option value="station-gradient">采样站位渐变 (Station Number)</option>
             <option value="longitude-gradient">经度渐变 (Longitude °E)</option>
             <option value="depth-group">表中深三层水分组</option>
             <option value="station">按采样站位区分 (定性 HSL)</option>
             <option value="uniform">学术单色 (深灰色)</option>
+          </select>
+        </div>
+
+        {/* Colormap Selection */}
+        <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155' }}>等值线与渐变色标 (Colormap)</label>
+          <select
+            value={tsPubColormap}
+            onChange={e => setTsPubColormap(e.target.value as any)}
+            style={{ width: '100%', padding: '6px 10px', fontSize: '11px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+          >
+            <option value="odv-rainbow">Ocean Rainbow (ODV 经典彩虹色)</option>
+            <option value="jet">Classic Jet (标准彩虹色)</option>
+            <option value="viridis">Viridis (学术均匀蓝黄绿)</option>
           </select>
         </div>
 
