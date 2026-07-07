@@ -136,6 +136,115 @@ function loessFilter(data: { x: number; y: number }[], bandwidth = 0.75) {
 
 }
 
+interface AscGridData {
+  ncols: number;
+  nrows: number;
+  xllcorner: number;
+  yllcorner: number;
+  cellsize: number;
+  nodata: number;
+  data: Float32Array;
+  isCenter: boolean;
+}
+
+function parseAscGrid(text: string): AscGridData {
+  const header: Record<string, number> = {};
+  let pos = 0;
+  const len = text.length;
+
+  function skipWhitespace() {
+    while (pos < len) {
+      const c = text.charCodeAt(pos);
+      if (c === 32 || c === 9 || c === 10 || c === 13) { // space, tab, LF, CR
+        pos++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  function readNextToken(): string {
+    skipWhitespace();
+    if (pos >= len) return '';
+    const start = pos;
+    while (pos < len) {
+      const c = text.charCodeAt(pos);
+      if (c === 32 || c === 9 || c === 10 || c === 13) {
+        break;
+      }
+      pos++;
+    }
+    return text.substring(start, pos);
+  }
+
+  const headerKeys = new Set(['ncols', 'nrows', 'xllcorner', 'yllcorner', 'xllcenter', 'yllcenter', 'cellsize', 'nodata_value']);
+
+  while (true) {
+    const savedPos = pos;
+    const token = readNextToken();
+    if (!token) break;
+    const lowerToken = token.toLowerCase();
+    if (headerKeys.has(lowerToken)) {
+      const valStr = readNextToken();
+      header[lowerToken] = parseFloat(valStr);
+    } else {
+      // Not a header key, rewind to before this token and start parsing numbers
+      pos = savedPos;
+      break;
+    }
+  }
+
+  const ncols = header['ncols'] || 0;
+  const nrows = header['nrows'] || 0;
+  const cellsize = header['cellsize'] || 0;
+  const nodata = header['nodata_value'] !== undefined ? header['nodata_value'] : -9999;
+
+  let xllcorner = header['xllcorner'];
+  let yllcorner = header['yllcorner'];
+  let isCenter = false;
+  if (xllcorner === undefined) {
+    xllcorner = header['xllcenter'] || 0;
+    yllcorner = header['yllcenter'] || 0;
+    isCenter = true;
+  }
+
+  if (ncols <= 0 || nrows <= 0 || cellsize <= 0) {
+    throw new Error("Invalid ASC grid header values.");
+  }
+
+  const totalValues = ncols * nrows;
+  const data = new Float32Array(totalValues);
+
+  let count = 0;
+  while (count < totalValues) {
+    skipWhitespace();
+    if (pos >= len) break;
+
+    const start = pos;
+    while (pos < len) {
+      const c = text.charCodeAt(pos);
+      if (c === 32 || c === 9 || c === 10 || c === 13) {
+        break;
+      }
+      pos++;
+    }
+
+    data[count++] = parseFloat(text.substring(start, pos));
+  }
+
+  return {
+    ncols,
+    nrows,
+    xllcorner: xllcorner || 0,
+    yllcorner: yllcorner || 0,
+    cellsize,
+    nodata,
+    data,
+    isCenter
+  };
+}
+
+
 
 
 const MULTI_COLORS = [
@@ -1019,7 +1128,32 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
   const [localTiffFile, setLocalTiffFile] = useState<File | null>(null);
 
-  const [bathySource, setBathySource] = useState<'api' | 'tiff' | 'fallback'>('api');
+  const [parsedAscData, setParsedAscData] = useState<AscGridData | null>(null);
+
+  const [bathySource, setBathySource] = useState<'api' | 'tiff' | 'asc' | 'fallback'>('api');
+
+  useEffect(() => {
+    if (!localTiffFile) {
+      setParsedAscData(null);
+      return;
+    }
+    if (localTiffFile.name.toLowerCase().endsWith('.asc')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const parsed = parseAscGrid(text);
+          setParsedAscData(parsed);
+        } catch (err) {
+          console.error("Failed to parse ASC file:", err);
+          setParsedAscData(null);
+        }
+      };
+      reader.readAsText(localTiffFile);
+    } else {
+      setParsedAscData(null);
+    }
+  }, [localTiffFile]);
 
   const [hoveredPoint2D, setHoveredPoint2D] = useState<{
 
@@ -2346,108 +2480,108 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
-      // 1. Try local GeoTIFF file first if uploaded (highly efficient on-demand windowed read)
-
+      // 1. Try local file first if uploaded
       if (localTiffFile) {
+        if (localTiffFile.name.toLowerCase().endsWith('.asc')) {
+          if (parsedAscData) {
+            try {
+              const { ncols, nrows, xllcorner, yllcorner, cellsize, nodata, data, isCenter } = parsedAscData;
+              const halfCell = cellsize / 2;
+              const minLon = isCenter ? xllcorner - halfCell : xllcorner;
+              const maxLon = minLon + ncols * cellsize;
+              const minLat = isCenter ? yllcorner - halfCell : yllcorner;
+              const maxLat = minLat + nrows * cellsize;
 
-        try {
+              const ascPoints: { xVal: number; depth: number }[] = [];
 
-          const tiff = await fromBlob(localTiffFile);
+              for (const pt of trackPoints) {
+                if (isCancelled) return;
+                if (
+                  pt.longitude >= minLon &&
+                  pt.longitude <= maxLon &&
+                  pt.latitude >= minLat &&
+                  pt.latitude <= maxLat
+                ) {
+                  const col = Math.floor((pt.longitude - minLon) / cellsize);
+                  const row = Math.floor((maxLat - pt.latitude) / cellsize);
 
-          const image = await tiff.getImage();
-
-          const width = image.getWidth();
-
-          const height = image.getHeight();
-
-          const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY] -> [minLon, minLat, maxLon, maxLat]
-
-          const [minLon, minLat, maxLon, maxLat] = bbox;
-
-
-
-          const tiffPoints: { xVal: number; depth: number }[] = [];
-
-
-
-          for (const pt of trackPoints) {
-
-            if (isCancelled) return;
-
-            if (
-
-              pt.longitude >= minLon &&
-
-              pt.longitude <= maxLon &&
-
-              pt.latitude >= minLat &&
-
-              pt.latitude <= maxLat
-
-            ) {
-
-              const xPercent = (pt.longitude - minLon) / (maxLon - minLon);
-
-              const yPercent = (maxLat - pt.latitude) / (maxLat - minLat);
-
-              const px = Math.max(0, Math.min(width - 1, Math.floor(xPercent * (width - 1))));
-
-              const py = Math.max(0, Math.min(height - 1, Math.floor(yPercent * (height - 1))));
-
-
-
-              // Read exactly 1x1 pixel window to minimize memory footprint
-
-              const rasters = await image.readRasters({
-
-                window: [px, py, px + 1, py + 1]
-
-              });
-
-              const val = rasters[0] ? (rasters[0] as any)[0] : null;
-
-
-
-              let depth = pt.fallbackDepth;
-
-              if (val !== null && val !== undefined && !isNaN(val) && val < 50000 && val > -50000) {
-
-                depth = Math.abs(val);
-
+                  let depth = pt.fallbackDepth;
+                  if (col >= 0 && col < ncols && row >= 0 && row < nrows) {
+                    const val = data[row * ncols + col];
+                    if (val !== nodata && val !== null && val !== undefined && !isNaN(val) && val < 50000 && val > -50000) {
+                      depth = Math.abs(val);
+                    }
+                  }
+                  ascPoints.push({ xVal: pt.xVal, depth });
+                } else {
+                  ascPoints.push({ xVal: pt.xVal, depth: pt.fallbackDepth });
+                }
               }
 
-              tiffPoints.push({ xVal: pt.xVal, depth });
+              if (!isCancelled) {
+                setHighResBathyPoints(ascPoints);
+                setBathySource('asc');
+                setLoadingBathy(false);
+              }
+              return;
+            } catch (err) {
+              console.error("Failed to read local ASC data:", err);
+            }
+          } else {
+            // ASC file is selected but parsing is in progress. Wait for parsedAscData to change.
+            return;
+          }
+        } else {
+          try {
+            const tiff = await fromBlob(localTiffFile);
+            const image = await tiff.getImage();
+            const width = image.getWidth();
+            const height = image.getHeight();
+            const bbox = image.getBoundingBox(); // [minX, minY, maxX, maxY] -> [minLon, minLat, maxLon, maxLat]
+            const [minLon, minLat, maxLon, maxLat] = bbox;
 
-            } else {
+            const tiffPoints: { xVal: number; depth: number }[] = [];
 
-              tiffPoints.push({ xVal: pt.xVal, depth: pt.fallbackDepth });
+            for (const pt of trackPoints) {
+              if (isCancelled) return;
+              if (
+                pt.longitude >= minLon &&
+                pt.longitude <= maxLon &&
+                pt.latitude >= minLat &&
+                pt.latitude <= maxLat
+              ) {
+                const xPercent = (pt.longitude - minLon) / (maxLon - minLon);
+                const yPercent = (maxLat - pt.latitude) / (maxLat - minLat);
+                const px = Math.max(0, Math.min(width - 1, Math.floor(xPercent * (width - 1))));
+                const py = Math.max(0, Math.min(height - 1, Math.floor(yPercent * (height - 1))));
 
+                // Read exactly 1x1 pixel window to minimize memory footprint
+                const rasters = await image.readRasters({
+                  window: [px, py, px + 1, py + 1]
+                });
+                const val = rasters[0] ? (rasters[0] as any)[0] : null;
+
+                let depth = pt.fallbackDepth;
+                if (val !== null && val !== undefined && !isNaN(val) && val < 50000 && val > -50000) {
+                  depth = Math.abs(val);
+                }
+                tiffPoints.push({ xVal: pt.xVal, depth });
+              } else {
+                tiffPoints.push({ xVal: pt.xVal, depth: pt.fallbackDepth });
+              }
             }
 
+            if (!isCancelled) {
+              setHighResBathyPoints(tiffPoints);
+              setBathySource('tiff');
+              setLoadingBathy(false);
+            }
+            return;
+          } catch (err) {
+            console.error("Failed to read local GeoTIFF, falling back to online API:", err);
+            // Let it fall through to API fetching
           }
-
-
-
-          if (!isCancelled) {
-
-            setHighResBathyPoints(tiffPoints);
-
-            setBathySource('tiff');
-
-            setLoadingBathy(false);
-
-          }
-
-          return;
-
-        } catch (err) {
-
-          console.error("Failed to read local GeoTIFF, falling back to online API:", err);
-
-          // Let it fall through to API fetching
-
         }
-
       }
 
 
@@ -2624,7 +2758,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     };
 
-  }, [visSubTab, activeStations2D, stationCoords, processedSamples, uniqueStationCoords, contourXAxis, stationJitteredCoords2D, localTiffFile]);
+  }, [visSubTab, activeStations2D, stationCoords, processedSamples, uniqueStationCoords, contourXAxis, stationJitteredCoords2D, localTiffFile, parsedAscData]);
 
 
 
@@ -9453,135 +9587,72 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
                 {loadingBathy && (
-
                   <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', padding: '4px 8px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '4px' }}>
-
                     <div className="animate-spin" style={{ display: 'inline-block', width: '10px', height: '10px', border: '1.5px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%' }} />
-
-                    正在{localTiffFile ? '从本地 GeoTIFF 中' : '在线'}解析高精度洋底地形...
-
+                    正在{localTiffFile ? (localTiffFile.name.toLowerCase().endsWith('.asc') ? '从本地 ASC 中' : '从本地 GeoTIFF 中') : '在线'}解析高精度洋底地形...
                   </div>
-
                 )}
-
-
 
                 {!loadingBathy && highResBathyPoints.length > 0 && (
-
                   <div style={{
-
                     fontSize: '11px',
-
                     color: bathySource === 'fallback' ? '#d97706' : '#10b981',
-
                     display: 'flex',
-
                     alignItems: 'center',
-
                     gap: '6px',
-
                     marginBottom: '8px',
-
                     padding: '4px 8px',
-
                     backgroundColor: bathySource === 'fallback' ? '#fffbeb' : '#ecfdf5',
-
                     borderRadius: '4px',
-
                     wordBreak: 'break-all'
-
                   }}>
-
                     <span style={{
-
                       display: 'inline-block',
-
                       width: '6px',
-
                       height: '6px',
-
                       backgroundColor: bathySource === 'fallback' ? '#d97706' : '#10b981',
-
                       borderRadius: '50%'
-
                     }} />
-
                     {bathySource === 'tiff'
-
                       ? `已启用本地 TIFF 地形: ${localTiffFile?.name}`
-
-                      : bathySource === 'api'
-
-                        ? '已启用 GEBCO 2020 Grid (在线 API)'
-
-                        : '已启用本地线性插值地形 (离线模式)'}
-
+                      : bathySource === 'asc'
+                        ? `已启用本地 ASC 地形: ${localTiffFile?.name}`
+                        : bathySource === 'api'
+                          ? '已启用 GEBCO 2020 Grid (在线 API)'
+                          : '已启用本地线性插值地形 (离线模式)'}
                   </div>
-
                 )}
 
-
-
                 {/* File Uploader Input */}
-
                 <div style={{ position: 'relative', marginTop: '6px' }}>
-
                   <label style={{
-
                     display: 'flex',
-
                     flexDirection: 'column',
-
                     alignItems: 'center',
-
                     justifyContent: 'center',
-
                     padding: '8px',
-
                     border: '1px dashed var(--border-color)',
-
                     borderRadius: '4px',
-
                     cursor: 'pointer',
-
                     backgroundColor: 'var(--bg-tertiary)',
-
                     textAlign: 'center',
-
                     fontSize: '11px',
-
                     color: 'var(--text-muted)'
-
                   }}>
-
-                    <span style={{ fontWeight: '500', color: '#0284c7' }}>点击或拖拽上传本地 GeoTIFF (.tif)</span>
-
-                    <span style={{ fontSize: '9px', marginTop: '2px' }}>(可选：用于 GEBCO 2026 等离线高精度地形)</span>
-
+                    <span style={{ fontWeight: '500', color: '#0284c7' }}>点击或拖拽上传本地 GeoTIFF (.tif) 或 ASCII (.asc)</span>
+                    <span style={{ fontSize: '9px', marginTop: '2px' }}>(可选：用于 GEBCO 2026/2020 等离线网格地形)</span>
                     <input
-
                       type="file"
-
-                      accept=".tif,.tiff"
-
+                      accept=".tif,.tiff,.asc"
                       style={{ display: 'none' }}
-
                       onChange={(e) => {
-
                         const file = e.target.files?.[0];
-
                         if (file) {
-
                           setLocalTiffFile(file);
-
                         }
-
                       }}
-
                     />
-
                   </label>
-
                 </div>
 
               </div>
