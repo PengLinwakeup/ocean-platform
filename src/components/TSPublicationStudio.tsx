@@ -66,6 +66,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   
   const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity' | 'delta_tracer'>('temperature');
   const [tsSectionAxis, setTsSectionAxis] = useState<'longitude' | 'latitude' | 'distance'>('longitude');
+  const [tsSectionHorizStretch, setTsSectionHorizStretch] = useState<string>('0.08');
+  const [tsSectionMaskThreshold, setTsSectionMaskThreshold] = useState<string>('0.25');
 
   const [enableOmp, setEnableOmp] = useState<boolean>(false);
   const [selectedOmpTracer, setSelectedOmpTracer] = useState<string>('DOC');
@@ -388,7 +390,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         
         for (let i = 0; i < sectionData.length; i++) {
           // Stretch horizontally by scaling dx down (e.g. by 0.22), representing a horizontal search ellipse
-          const dx = ((sectionData[i][xKey] - gx) / Math.max(xMax - xMin, 0.001)) * 0.22;
+          const dx = ((sectionData[i][xKey] - gx) / Math.max(xMax - xMin, 0.001)) * (parseFloat(tsSectionHorizStretch) || 0.08);
           const dy = (sectionData[i].depth - gy) / depthMaxVal;
           const dist2 = dx * dx + dy * dy;
           
@@ -404,7 +406,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         const interpVal = exact ? exactV : (wSum > 0 ? vSum / wSum : valMin);
         gridData[row * gridCols + col] = interpVal;
 
-        if (minDistSq > 0.08) {
+        if (minDistSq > (parseFloat(tsSectionMaskThreshold) || 0.25)) {
           cellMask[row * gridCols + col] = 2; // Distance masked
         } else {
           cellMask[row * gridCols + col] = 0; // Normal
@@ -465,7 +467,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       stationDepths,
       smoothedGridData
     };
-  }, [sectionData, tsSectionAxis, tsSectionParam, depthMaxVal]);
+  }, [sectionData, tsSectionAxis, tsSectionParam, depthMaxVal, tsSectionHorizStretch, tsSectionMaskThreshold]);
 
   // Bisection solver for density contours (sigma_theta)
   const solveTemp = (S: number, targetSigma: number): number => {
@@ -1166,7 +1168,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         const lastDrawnYByStation: { [station: string]: number } = {};
         sectionData.forEach(d => {
           if (d.depth > depthMaxVal) return;
-          const px = plotX + ((d[xKey] - xMin) / (xMax - xMin || 1)) * plotW;
+          const px = plotX + (((d as any)[xKey] - xMin) / (xMax - xMin || 1)) * plotW;
           const py = plotY + (d.depth / depthMaxVal) * plotH;
 
           // Thin out dots: skip if another dot was drawn within 7px vertically on the same station cast
@@ -1228,7 +1230,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
                   d.salinity >= wm.sMin &&
                   d.salinity <= wm.sMax
                 ) {
-                  sumX += d[xKey];
+                  sumX += (d as any)[xKey];
                   sumDepth += d.depth;
                   count++;
                 }
@@ -1279,7 +1281,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
             // Draw Leeuwin Current Inflow separately: narrow boundary current at Australia's west coast (~115°E), shallow (<150m)
             const lcPoints = sectionData.filter(d => d.longitude >= 110 && d.depth <= 150);
             if (lcPoints.length >= 2) {
-              const sumX = lcPoints.reduce((sum, d) => sum + d[xKey], 0);
+              const sumX = lcPoints.reduce((sum, d) => sum + (d as any)[xKey], 0);
               const sumDepth = lcPoints.reduce((sum, d) => sum + d.depth, 0);
               const lcCentroid = { x: sumX / lcPoints.length, depth: sumDepth / lcPoints.length };
 
@@ -1797,12 +1799,28 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
               </select>
             </div>
           </div>
-          <div>
-            <label style={{ fontSize: '10px', color: '#64748b' }}>最大深度范围 (m)</label>
-            <input
-              type="number" step="100" value={tsPubDepthMax} onChange={e => setTsPubDepthMax(e.target.value)}
-              style={{ width: '100%', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
-            />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+            <div>
+              <label style={{ fontSize: '10px', color: '#64748b' }}>最大深度 (m)</label>
+              <input
+                type="number" step="100" value={tsPubDepthMax} onChange={e => setTsPubDepthMax(e.target.value)}
+                style={{ width: '100%', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '10px', color: '#64748b' }}>水平拉伸度</label>
+              <input
+                type="number" step="0.01" min="0.01" max="1.0" value={tsSectionHorizStretch} onChange={e => setTsSectionHorizStretch(e.target.value)}
+                style={{ width: '100%', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '10px', color: '#64748b' }}>遮罩阈值</label>
+              <input
+                type="number" step="0.05" min="0.01" max="2.0" value={tsSectionMaskThreshold} onChange={e => setTsSectionMaskThreshold(e.target.value)}
+                style={{ width: '100%', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+              />
+            </div>
           </div>
         </div>
 

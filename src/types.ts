@@ -62,6 +62,7 @@ export interface HydrologicalSample {
   depth: number;
   pressure: number;
   values: Record<string, number>;
+  botDepth?: number;
 }
 
 

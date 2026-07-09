@@ -949,6 +949,55 @@ export default function App() {
   const exportToExcel = () => {
     const wb = xlsx.utils.book_new();
 
+    // Helper to map headers to ODV format
+    const mapHeader = (h: string) => {
+      const lower = h.toLowerCase().trim();
+      if (lower.startsWith('lat')) return 'Lat';
+      if (lower.startsWith('long') || lower.startsWith('lon')) return 'Long';
+      if (lower === 'depth' || lower === 'depth (m)') return 'Depth';
+      if (lower.includes('temp')) return 'Temp in sit';
+      if (lower.includes('sal')) return 'Sal';
+      if (lower.includes('ph')) return 'pHTotal cc';
+      if (lower.includes('oxygen') || lower.includes('oxy')) return 'Oxygen (u';
+      if (lower.includes('alkalinity') || lower.includes('alk')) return 'Total Alkalinity';
+      return h;
+    };
+
+    // Pre-group hydro samples by normalized station name to avoid O(N) filter on every call
+    const hydroByStation = new Map<string, HydrologicalSample[]>();
+    if (hydroSamples) {
+      hydroSamples.forEach(h => {
+        if (h.station) {
+          const norm = normalizeStationName(h.station);
+          let list = hydroByStation.get(norm);
+          if (!list) {
+            list = [];
+            hydroByStation.set(norm, list);
+          }
+          list.push(h);
+        }
+      });
+    }
+
+    // Helper to map station + depth to closest hydro profile sample
+    const findHydroDataForSample = (st: string | null, depth: number | null) => {
+      if (!st || depth === null || !hydroSamples || hydroSamples.length === 0) return null;
+      const normSt = normalizeStationName(st);
+      const stationHydro = hydroByStation.get(normSt);
+      if (!stationHydro || stationHydro.length === 0) return null;
+
+      let closest = stationHydro[0];
+      let minDiff = Math.abs(closest.depth - depth);
+      for (const h of stationHydro) {
+        const diff = Math.abs(h.depth - depth);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = h;
+        }
+      }
+      return closest;
+    };
+
     // 1. Final Data Sheet
     const finalDataRows: any[][] = [
       ["DOC 分析报告"],
@@ -1055,9 +1104,190 @@ export default function App() {
     const wsSummary = xlsx.utils.aoa_to_sheet(summaryRows);
     xlsx.utils.book_append_sheet(wb, wsSummary, "DOC_Summary");
 
-    // Download file
+    // 4. ODV Data Sheet
+    const odvRows: any[][] = [];
+    
+    // Calculate station maximum depth from both hydro and processed samples as final fallback
+    const stationMaxDepths = new Map<string, number>();
+    processedSamples.forEach(ps => {
+      if (ps.station && ps.depth !== null) {
+        const norm = normalizeStationName(ps.station);
+        const curMax = stationMaxDepths.get(norm) || 0;
+        if (ps.depth > curMax) {
+          stationMaxDepths.set(norm, ps.depth);
+        }
+      }
+    });
+    if (hydroSamples) {
+      hydroSamples.forEach(h => {
+        if (h.station && h.depth !== null) {
+          const norm = normalizeStationName(h.station);
+          const curMax = stationMaxDepths.get(norm) || 0;
+          if (h.depth > curMax) {
+            stationMaxDepths.set(norm, h.depth);
+          }
+        }
+      });
+    }
+
+    // ODV headers
+    const odvHeaders = ['Station', 'Longitude [degrees_east]', 'Latitude [degrees_north]', 'Bot. Depth [m]', 'Depth [m]'];
+    // Add CTD parameters if they exist
+    const mappedParamNames = hydroParameters.map(p => mapHeader(p));
+    odvHeaders.push(...mappedParamNames);
+    odvHeaders.push('DOC (µmol/L)');
+    odvRows.push(odvHeaders);
+
+    // Filter out rejected/standards/blanks for ODV format
+    const cleanProcessed = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank && !s.isRejected);
+
+    interface OdvExportRow {
+      station: string;
+      lat: number | "";
+      lon: number | "";
+      botDepth: number | "";
+      depth: number;
+      ctdValues: Record<string, number>;
+      docValue: number | "";
+    }
+
+    const allRows: OdvExportRow[] = [];
+    const matchedProcessedIds = new Set<string>();
+
+    // Pre-calculate the closest hydro sample for all cleanProcessed samples to avoid loop overhead
+    const processedClosestHydro = new Map<string, HydrologicalSample | null>();
+    cleanProcessed.forEach(s => {
+      processedClosestHydro.set(s.id, findHydroDataForSample(s.station, s.depth));
+    });
+
+    // Pre-group cleanProcessed by their closest hydro sample ID (if it is within 2.5 meters)
+    const processedByClosestHydroId = new Map<string, typeof cleanProcessed>();
+    cleanProcessed.forEach(s => {
+      const closest = processedClosestHydro.get(s.id);
+      if (closest && s.depth !== null && Math.abs(closest.depth - s.depth) <= 2.5) {
+        let list = processedByClosestHydroId.get(closest.id);
+        if (!list) {
+          list = [];
+          processedByClosestHydroId.set(closest.id, list);
+        }
+        list.push(s);
+      }
+    });
+
+    // 1. Process all hydroSamples
+    if (hydroSamples && hydroSamples.length > 0) {
+      hydroSamples.forEach(h => {
+        // Find if there is a matching DOC sample
+        const candidates = processedByClosestHydroId.get(h.id) || [];
+        const match = candidates.find(s => !matchedProcessedIds.has(s.id));
+
+        if (match) {
+          matchedProcessedIds.add(match.id);
+        }
+
+        let botDepthVal: number | "" = h.botDepth !== undefined ? h.botDepth : "";
+        if (botDepthVal === "" && h.station) {
+          const normSt = normalizeStationName(h.station);
+          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+          if (sc && sc.botDepth !== undefined) {
+            botDepthVal = sc.botDepth;
+          } else {
+            botDepthVal = stationMaxDepths.get(normSt) || "";
+          }
+        }
+
+        allRows.push({
+          station: h.station,
+          lat: h.latitude,
+          lon: h.longitude,
+          botDepth: botDepthVal,
+          depth: h.depth,
+          ctdValues: h.values || {},
+          docValue: match ? match.concentration : ""
+        });
+      });
+    }
+
+    // 2. Process remaining cleanProcessed samples that didn't match any hydro sample
+    cleanProcessed.forEach(s => {
+      if (matchedProcessedIds.has(s.id)) return;
+
+      const hydroData = processedClosestHydro.get(s.id) || null;
+      const lat = hydroData ? hydroData.latitude : (s.latitude !== undefined ? s.latitude : "");
+      const lon = hydroData ? hydroData.longitude : (s.longitude !== undefined ? s.longitude : "");
+      
+      let botDepthVal: number | "" = "";
+      if (hydroData && hydroData.botDepth !== undefined) {
+        botDepthVal = hydroData.botDepth;
+      } else if (s.botDepth !== undefined) {
+        botDepthVal = s.botDepth;
+      } else if (s.station) {
+        const normSt = normalizeStationName(s.station);
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
+        if (sc && sc.botDepth !== undefined) {
+          botDepthVal = sc.botDepth;
+        } else {
+          botDepthVal = stationMaxDepths.get(normSt) || "";
+        }
+      }
+
+      allRows.push({
+        station: s.station || "",
+        lat: lat !== "" ? Number(lat) : "",
+        lon: lon !== "" ? Number(lon) : "",
+        botDepth: botDepthVal,
+        depth: s.depth !== null ? s.depth : 0,
+        ctdValues: {},
+        docValue: s.concentration
+      });
+    });
+
+    const sortedRows = [...allRows].sort((a, b) => {
+      const getStationNumber = (st: string) => {
+        const match = st.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      };
+      const numA = getStationNumber(a.station);
+      const numB = getStationNumber(b.station);
+      if (numA !== numB) {
+        return numB - numA; // Descending (e.g. ST-50 -> ST-1)
+      }
+      return b.depth - a.depth; // Descending (Deepest -> Shallowest)
+    });
+
+    sortedRows.forEach(row => {
+      const excelRow: any[] = [
+        row.station,
+        row.lon !== "" ? parseFloat(Number(row.lon).toFixed(6)) : "",
+        row.lat !== "" ? parseFloat(Number(row.lat).toFixed(6)) : "",
+        row.botDepth !== "" ? parseFloat(Number(row.botDepth).toFixed(1)) : "",
+        parseFloat(Number(row.depth).toFixed(1))
+      ];
+      
+      hydroParameters.forEach(p => {
+        if (row.ctdValues[p] !== undefined) {
+          excelRow.push(parseFloat(Number(row.ctdValues[p]).toFixed(4)));
+        } else {
+          excelRow.push("");
+        }
+      });
+      
+      excelRow.push(row.docValue !== "" ? parseFloat(Number(row.docValue).toFixed(2)) : "");
+      odvRows.push(excelRow);
+    });
+
+    const wsOdv = xlsx.utils.aoa_to_sheet(odvRows);
+    xlsx.utils.book_append_sheet(wb, wsOdv, "ODV_Format_Data");
+
+    // Download files
     const fileBase = files.length > 0 ? files[0].name.split('.')[0] : 'doc_data';
     xlsx.writeFile(wb, `${fileBase}_processed.xlsx`);
+
+    // Download separate clean ODV file (without other sheets like Raw/Summary)
+    const wbOdv = xlsx.utils.book_new();
+    const wsOdvClean = xlsx.utils.aoa_to_sheet(odvRows);
+    xlsx.utils.book_append_sheet(wbOdv, wsOdvClean, "ODV_Data");
+    xlsx.writeFile(wbOdv, `${fileBase}_odv.xlsx`);
   };
 
   // Toggle single injection inclusion

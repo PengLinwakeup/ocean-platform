@@ -4,7 +4,7 @@ import { fromBlob } from 'geotiff';
 
 import {
 
-  LineChart, Map, Download, AlertTriangle, Wrench, Layout, Info
+  LineChart, Map as MapIcon, Download, AlertTriangle, Wrench, Layout, Info
 
 } from 'lucide-react';
 
@@ -548,6 +548,8 @@ interface ChartStyles {
   colorBanding: 'continuous' | 'discrete';
 
   maskDistance: number; // 0.1 to 1.0 (mask threshold percentage, 1.0 means no mask)
+
+  profileBoundPenalty?: number; // Penalty factor for out of bounds depth (default 25.0)
 
   showTopStationLabels: boolean;
 
@@ -1607,6 +1609,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       maskDistance: 0.35,
 
+      profileBoundPenalty: 25.0,
+
       showTopStationLabels: true,
 
       respectBathyBarriers: true,
@@ -1735,11 +1739,27 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
+  // Local state for profileBoundPenalty slider to make dragging highly responsive
+
+  const [sliderPenaltyFactor, setSliderPenaltyFactor] = useState(chartStyles.profileBoundPenalty ?? 25.0);
+
+  const penaltyDebounceTimer = useRef<NodeJS.Timeout | null>(null);
+
+
+
   useEffect(() => {
 
     setSliderMaskDistance(chartStyles.maskDistance);
 
   }, [chartStyles.maskDistance]);
+
+
+
+  useEffect(() => {
+
+    setSliderPenaltyFactor(chartStyles.profileBoundPenalty ?? 25.0);
+
+  }, [chartStyles.profileBoundPenalty]);
 
 
 
@@ -4117,73 +4137,107 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
+    // 1. Calculate min required depth at each active station (actual max sample depth + 20m safety margin)
+
+    const stationMinDepths = activeStations2D.map(st => {
+
+      const normSt = normalizeStationName(st);
+
+      const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
+
+      const maxSampleDepth = stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 0;
+
+      const xVal = stationJitteredCoords2D[st] || 0;
+
+      return { xVal, minDepth: maxSampleDepth > 0 ? maxSampleDepth + 20 : 0 };
+
+    }).sort((a, b) => a.xVal - b.xVal);
+
+
+
+    const getMinRequiredDepthAtX = (xVal: number): number => {
+
+      if (stationMinDepths.length === 0) return 0;
+
+      for (let i = 0; i < stationMinDepths.length - 1; i++) {
+
+        if (xVal >= stationMinDepths[i].xVal && xVal <= stationMinDepths[i+1].xVal) {
+
+          const t = (xVal - stationMinDepths[i].xVal) / (stationMinDepths[i+1].xVal - stationMinDepths[i].xVal || 1);
+
+          return stationMinDepths[i].minDepth * (1 - t) + stationMinDepths[i+1].minDepth * t;
+
+        }
+
+      }
+
+      if (xVal < stationMinDepths[0].xVal) return stationMinDepths[0].minDepth;
+
+      return stationMinDepths[stationMinDepths.length - 1].minDepth;
+
+    };
+
+
+
+    // 2. Pre-calculate corrected bathy points so they accommodate sampling depths
+
+    let correctedBathyPoints: { xVal: number; depth: number }[] = [];
+
+    if (highResBathyPoints && highResBathyPoints.length > 0) {
+
+      correctedBathyPoints = highResBathyPoints.map(pt => ({
+
+        xVal: pt.xVal,
+
+        depth: Math.max(pt.depth, getMinRequiredDepthAtX(pt.xVal))
+
+      }));
+
+    } else {
+
+      correctedBathyPoints = activeStations2D.map(st => {
+
+        const normSt = normalizeStationName(st);
+
+        const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
+
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+
+          || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
+
+        const botDepthVal = sc?.botDepth !== undefined ? (sc as any).botDepth
+
+          : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
+
+        const xVal = stationJitteredCoords2D[st] || 0;
+
+        return { xVal, depth: Math.max(botDepthVal, getMinRequiredDepthAtX(xVal)) };
+
+      }).sort((a, b) => a.xVal - b.xVal);
+
+    }
+
+
+
     const getBathyDepthAtX = (xVal: number): number => {
 
-      if (!highResBathyPoints || highResBathyPoints.length === 0) {
+      if (correctedBathyPoints.length === 0) return 6000;
 
-        const sortedBathy = activeStations2D.map(st => {
+      for (let i = 0; i < correctedBathyPoints.length - 1; i++) {
 
-          const normSt = normalizeStationName(st);
+        if (xVal >= correctedBathyPoints[i].xVal && xVal <= correctedBathyPoints[i+1].xVal) {
 
-          const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
+          const t = (xVal - correctedBathyPoints[i].xVal) / (correctedBathyPoints[i+1].xVal - correctedBathyPoints[i].xVal || 1);
 
-          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
-
-            || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
-
-          const botDepthVal = sc?.botDepth !== undefined ? (sc as any).botDepth
-
-            : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
-
-          const stX = stationJitteredCoords2D[st] || 0;
-
-          return { xVal: stX, depth: botDepthVal };
-
-        }).sort((a, b) => a.xVal - b.xVal);
-
-
-
-        if (sortedBathy.length === 0) return 6000;
-
-
-
-        for (let i = 0; i < sortedBathy.length - 1; i++) {
-
-          if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
-
-            const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
-
-            return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
-
-          }
-
-        }
-
-        if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
-
-        return sortedBathy[sortedBathy.length - 1].depth;
-
-      }
-
-
-
-      const sortedBathy = [...highResBathyPoints].sort((a, b) => a.xVal - b.xVal);
-
-      for (let i = 0; i < sortedBathy.length - 1; i++) {
-
-        if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
-
-          const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
-
-          return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
+          return correctedBathyPoints[i].depth * (1 - t) + correctedBathyPoints[i+1].depth * t;
 
         }
 
       }
 
-      if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
+      if (xVal < correctedBathyPoints[0].xVal) return correctedBathyPoints[0].depth;
 
-      return sortedBathy[sortedBathy.length - 1].depth;
+      return correctedBathyPoints[correctedBathyPoints.length - 1].depth;
 
     };
 
@@ -4241,6 +4295,90 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
+    // Calculate profile depth bounds (minY, maxY) for each station
+
+    const stationRangesMap = new Map<number, { minY: number; maxY: number }>();
+
+    dataPoints.forEach(pt => {
+
+      const rx = pt.rawX;
+
+      const ry = pt.rawY;
+
+      const existing = stationRangesMap.get(rx);
+
+      if (!existing) {
+
+        stationRangesMap.set(rx, { minY: ry, maxY: ry });
+
+      } else {
+
+        existing.minY = Math.min(existing.minY, ry);
+
+        existing.maxY = Math.max(existing.maxY, ry);
+
+      }
+
+    });
+
+
+
+    const sortedRanges = Array.from(stationRangesMap.entries())
+
+      .map(([rx, range]) => ({ rawX: rx, minY: range.minY, maxY: range.maxY }))
+
+      .sort((a, b) => a.rawX - b.rawX);
+
+
+
+    const getInterpolatedStationProfileBounds = (gridXNorm: number) => {
+
+      if (sortedRanges.length === 0) {
+
+        return { minY: 0, maxY: 1 };
+
+      }
+
+      if (gridXNorm <= sortedRanges[0].rawX) {
+
+        return { minY: sortedRanges[0].minY, maxY: sortedRanges[0].maxY };
+
+      }
+
+      if (gridXNorm >= sortedRanges[sortedRanges.length - 1].rawX) {
+
+        return { minY: sortedRanges[sortedRanges.length - 1].minY, maxY: sortedRanges[sortedRanges.length - 1].maxY };
+
+      }
+
+      for (let i = 0; i < sortedRanges.length - 1; i++) {
+
+        const left = sortedRanges[i];
+
+        const right = sortedRanges[i + 1];
+
+        if (gridXNorm >= left.rawX && gridXNorm <= right.rawX) {
+
+          const denom = right.rawX - left.rawX || 1;
+
+          const t = (gridXNorm - left.rawX) / denom;
+
+          const interpolatedMinY = left.minY * (1 - t) + right.minY * t;
+
+          const interpolatedMaxY = left.maxY * (1 - t) + right.maxY * t;
+
+          return { minY: interpolatedMinY, maxY: interpolatedMaxY };
+
+        }
+
+      }
+
+      return { minY: 0, maxY: 1 };
+
+    };
+
+
+
     for (let r = 0; r < gridHeight; r++) {
 
       const gridYNorm = (r / (gridHeight - 1)) * anisotropyFactor;
@@ -4285,7 +4423,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
-        // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
+        // 2. Pre-calculate grid-level minimum squared distance to any data point (with vertical weight scaling)
 
         let minDistSq = 999999;
 
@@ -4295,7 +4433,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
           const dy = rawY - dataPoints[i].rawY;
 
-          const distSq = dx * dx + dy * dy;
+          // Apply vertical scaling factor of 0.12 to reduce vertical gap masking sensitivity
+
+          const distSq = dx * dx + dy * dy * 0.12;
 
           if (distSq < minDistSq) {
 
@@ -4304,6 +4444,30 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
           }
 
         }
+
+        // Apply profile-bound penalty to gridDistSq to prevent horizontal over-stretching in deep unsampled regions
+
+        const bounds = getInterpolatedStationProfileBounds(gridXNorm);
+
+        let outOfBoundsDist = 0;
+
+        if (rawY < bounds.minY) {
+
+          outOfBoundsDist = bounds.minY - rawY;
+
+        } else if (rawY > bounds.maxY) {
+
+          outOfBoundsDist = rawY - bounds.maxY;
+
+        }
+
+        if (outOfBoundsDist > 0) {
+
+          minDistSq += outOfBoundsDist * outOfBoundsDist * (chartStyles.profileBoundPenalty ?? 25.0);
+
+        }
+
+
 
         gridDistSq[idx] = minDistSq;
 
@@ -4362,15 +4526,18 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
     const sampleDots = filteredSamples.map(s => {
-
       const xVal = getXValue(s);
-
       const cx = Math.max(0, Math.min(700, invertXAxis2D ? (1 - (xVal - minX) / xSpan) * 700 : ((xVal - minX) / xSpan) * 700));
-
-      const cy = ((s.depth! - minY) / ySpan) * 380;
-
-      return { cx, cy, conc: s.concentration, xNorm: (xVal - minX) / xSpan, yNorm: (s.depth! - minY) / ySpan, station: s.station, depth: s.depth };
-
+      const cy = Math.max(0, Math.min(400, ((s.depth! - minY) / ySpan) * 400));
+      return {
+        cx,
+        cy,
+        conc: s.concentration,
+        xNorm: (xVal - minX) / xSpan,
+        yNorm: (s.depth! - minY) / ySpan,
+        station: s.station,
+        depth: s.depth
+      };
     });
 
 
@@ -4415,7 +4582,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       ticks,
 
-      validSamples
+      validSamples,
+
+      correctedBathyPoints
 
     };
 
@@ -4525,72 +4694,107 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
+    // 1. Calculate min required depth at each active station (actual max sample depth + 20m safety margin)
+
+    const stationMinDepths = activeStations2D.map(st => {
+
+      const normSt = normalizeStationName(st);
+
+      const stSamples = unfilteredValidSamples.filter(s => normalizeStationName(s.station) === normSt);
+
+      const maxSampleDepth = stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 0;
+
+      const xVal = stationJitteredCoords2D[st] || 0;
+
+      return { xVal, minDepth: maxSampleDepth > 0 ? maxSampleDepth + 20 : 0 };
+
+    }).sort((a, b) => a.xVal - b.xVal);
+
+
+
+    const getMinRequiredDepthAtX = (xVal: number): number => {
+
+      if (stationMinDepths.length === 0) return 0;
+
+      for (let i = 0; i < stationMinDepths.length - 1; i++) {
+
+        if (xVal >= stationMinDepths[i].xVal && xVal <= stationMinDepths[i+1].xVal) {
+
+          const t = (xVal - stationMinDepths[i].xVal) / (stationMinDepths[i+1].xVal - stationMinDepths[i].xVal || 1);
+
+          return stationMinDepths[i].minDepth * (1 - t) + stationMinDepths[i+1].minDepth * t;
+
+        }
+
+      }
+
+      if (xVal < stationMinDepths[0].xVal) return stationMinDepths[0].minDepth;
+
+      return stationMinDepths[stationMinDepths.length - 1].minDepth;
+
+    };
+
+
+
+    // 2. Pre-calculate corrected bathy points so they accommodate sampling depths
+
+    let correctedBathyPoints: { xVal: number; depth: number }[] = [];
+
+    if (highResBathyPoints && highResBathyPoints.length > 0) {
+
+      correctedBathyPoints = highResBathyPoints.map(pt => ({
+
+        xVal: pt.xVal,
+
+        depth: Math.max(pt.depth, getMinRequiredDepthAtX(pt.xVal))
+
+      }));
+
+    } else {
+
+      correctedBathyPoints = activeStations2D.map(st => {
+
+        const normSt = normalizeStationName(st);
+
+        const stSamples = unfilteredValidSamples.filter(s => normalizeStationName(s.station) === normSt);
+
+        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
+
+          || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
+
+        const botDepthVal = sc?.botDepth !== undefined ? (sc as any).botDepth
+
+          : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
+
+        const xVal = stationJitteredCoords2D[st] || 0;
+
+        return { xVal, depth: Math.max(botDepthVal, getMinRequiredDepthAtX(xVal)) };
+
+      }).sort((a, b) => a.xVal - b.xVal);
+
+    }
+
+
+
     const getBathyDepthAtX = (xVal: number): number => {
 
-      if (!highResBathyPoints || highResBathyPoints.length === 0) {
+      if (correctedBathyPoints.length === 0) return 6000;
 
-        const sortedBathy = activeStations2D.map(st => {
+      for (let i = 0; i < correctedBathyPoints.length - 1; i++) {
 
-          const normSt = normalizeStationName(st);
+        if (xVal >= correctedBathyPoints[i].xVal && xVal <= correctedBathyPoints[i+1].xVal) {
 
-          const stSamples = unfilteredValidSamples.filter(s => normalizeStationName(s.station) === normSt);
+          const t = (xVal - correctedBathyPoints[i].xVal) / (correctedBathyPoints[i+1].xVal - correctedBathyPoints[i].xVal || 1);
 
-          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt)
-            || (hydroSamples && hydroSamples.find(h => normalizeStationName(h.station) === normSt));
-
-          const botDepthVal = sc?.botDepth !== undefined ? (sc as any).botDepth
-
-            : (stSamples.length > 0 ? Math.max(...stSamples.map(s => s.depth || 0)) : 100);
-
-          const stX = stationJitteredCoords2D[st] || 0;
-
-          return { xVal: stX, depth: botDepthVal };
-
-        }).sort((a, b) => a.xVal - b.xVal);
-
-
-
-        if (sortedBathy.length === 0) return 6000;
-
-
-
-        for (let i = 0; i < sortedBathy.length - 1; i++) {
-
-          if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
-
-            const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
-
-            return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
-
-          }
-
-        }
-
-        if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
-
-        return sortedBathy[sortedBathy.length - 1].depth;
-
-      }
-
-
-
-      const sortedBathy = [...highResBathyPoints].sort((a, b) => a.xVal - b.xVal);
-
-      for (let i = 0; i < sortedBathy.length - 1; i++) {
-
-        if (xVal >= sortedBathy[i].xVal && xVal <= sortedBathy[i+1].xVal) {
-
-          const t = (xVal - sortedBathy[i].xVal) / (sortedBathy[i+1].xVal - sortedBathy[i].xVal || 1);
-
-          return sortedBathy[i].depth + t * (sortedBathy[i+1].depth - sortedBathy[i].depth);
+          return correctedBathyPoints[i].depth * (1 - t) + correctedBathyPoints[i+1].depth * t;
 
         }
 
       }
 
-      if (xVal < sortedBathy[0].xVal) return sortedBathy[0].depth;
+      if (xVal < correctedBathyPoints[0].xVal) return correctedBathyPoints[0].depth;
 
-      return sortedBathy[sortedBathy.length - 1].depth;
+      return correctedBathyPoints[correctedBathyPoints.length - 1].depth;
 
     };
 
@@ -4646,6 +4850,90 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
+    // Calculate profile depth bounds (minY, maxY) for each station
+
+    const stationRangesMap = new Map<number, { minY: number; maxY: number }>();
+
+    dataPoints.forEach(pt => {
+
+      const rx = pt.rawX;
+
+      const ry = pt.rawY;
+
+      const existing = stationRangesMap.get(rx);
+
+      if (!existing) {
+
+        stationRangesMap.set(rx, { minY: ry, maxY: ry });
+
+      } else {
+
+        existing.minY = Math.min(existing.minY, ry);
+
+        existing.maxY = Math.max(existing.maxY, ry);
+
+      }
+
+    });
+
+
+
+    const sortedRanges = Array.from(stationRangesMap.entries())
+
+      .map(([rx, range]) => ({ rawX: rx, minY: range.minY, maxY: range.maxY }))
+
+      .sort((a, b) => a.rawX - b.rawX);
+
+
+
+    const getInterpolatedStationProfileBounds = (gridXNorm: number) => {
+
+      if (sortedRanges.length === 0) {
+
+        return { minY: 0, maxY: 1 };
+
+      }
+
+      if (gridXNorm <= sortedRanges[0].rawX) {
+
+        return { minY: sortedRanges[0].minY, maxY: sortedRanges[0].maxY };
+
+      }
+
+      if (gridXNorm >= sortedRanges[sortedRanges.length - 1].rawX) {
+
+        return { minY: sortedRanges[sortedRanges.length - 1].minY, maxY: sortedRanges[sortedRanges.length - 1].maxY };
+
+      }
+
+      for (let i = 0; i < sortedRanges.length - 1; i++) {
+
+        const left = sortedRanges[i];
+
+        const right = sortedRanges[i + 1];
+
+        if (gridXNorm >= left.rawX && gridXNorm <= right.rawX) {
+
+          const denom = right.rawX - left.rawX || 1;
+
+          const t = (gridXNorm - left.rawX) / denom;
+
+          const interpolatedMinY = left.minY * (1 - t) + right.minY * t;
+
+          const interpolatedMaxY = left.maxY * (1 - t) + right.maxY * t;
+
+          return { minY: interpolatedMinY, maxY: interpolatedMaxY };
+
+        }
+
+      }
+
+      return { minY: 0, maxY: 1 };
+
+    };
+
+
+
     for (let r = 0; r < gridHeight; r++) {
 
       const gridYNorm = (r / (gridHeight - 1)) * anisotropyFactor;
@@ -4674,7 +4962,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
-        // 2. Pre-calculate grid-level minimum squared distance to any data point (Grid-level Distance Field)
+        // 2. Pre-calculate grid-level minimum squared distance to any data point (with vertical weight scaling)
 
         let minDistSq = 999999;
 
@@ -4684,13 +4972,37 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
           const dy = rawY - dataPoints[i].rawY;
 
-          const distSq = dx * dx + dy * dy;
+          // Apply vertical scaling factor of 0.12 to reduce vertical gap masking sensitivity
+
+          const distSq = dx * dx + dy * dy * 0.12;
 
           if (distSq < minDistSq) {
 
             minDistSq = distSq;
 
           }
+
+        }
+
+        // Apply profile-bound penalty to gridDistSq to prevent horizontal over-stretching in deep unsampled regions
+
+        const bounds = getInterpolatedStationProfileBounds(gridXNorm);
+
+        let outOfBoundsDist = 0;
+
+        if (rawY < bounds.minY) {
+
+          outOfBoundsDist = bounds.minY - rawY;
+
+        } else if (rawY > bounds.maxY) {
+
+          outOfBoundsDist = rawY - bounds.maxY;
+
+        }
+
+        if (outOfBoundsDist > 0) {
+
+          minDistSq += outOfBoundsDist * outOfBoundsDist * (chartStyles.profileBoundPenalty ?? 25.0);
 
         }
 
@@ -4784,8 +5096,6 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       minX,
 
-      maxX,
-
       xSpan,
 
       minY,
@@ -4802,7 +5112,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       ticks,
 
-      validSamples: unfilteredValidSamples
+      validSamples: unfilteredValidSamples,
+
+      correctedBathyPoints
 
     };
 
@@ -4843,29 +5155,17 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
     const {
-
       gridValues,
-
       gridDensityValues,
-
       gridDistSq,
-
       minX,
-
       xSpan,
-
       minY,
-
       ySpan,
-
       labelsList,
-
       sampleDots,
-
       ticks,
-
-      validSamples
-
+      correctedBathyPoints
     } = gridData;
 
 
@@ -5344,46 +5644,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     let bathyPoints: { cx: number; cy: number }[] = [];
 
-
-
-    if (highResBathyPoints && highResBathyPoints.length > 0) {
-
-      bathyPoints = highResBathyPoints.map(pt => {
-
+    if (correctedBathyPoints && correctedBathyPoints.length > 0) {
+      bathyPoints = correctedBathyPoints.map(pt => {
         const cx = invertXAxis2D ? (1 - (pt.xVal - minX) / xSpan) * canvasWidth : ((pt.xVal - minX) / xSpan) * canvasWidth;
-
         const cy = ((pt.depth - minY) / ySpan) * canvasHeight;
-
         return { cx, cy };
-
       });
-
-    } else {
-
-      bathyPoints = activeStations2D.map(st => {
-
-        const normSt = normalizeStationName(st);
-
-        const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
-
-        const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
-
-        const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
-
-          || Math.max(...stSamples.map(s => s.depth || 0), 100);
-
-
-
-        const xVal = stationJitteredCoords2D[st] || 0;
-
-        const cx = invertXAxis2D ? (1 - (xVal - minX) / xSpan) * canvasWidth : ((xVal - minX) / xSpan) * canvasWidth;
-
-        const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
-
-        return { cx, cy };
-
-      });
-
     }
 
 
@@ -5416,7 +5682,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     setTopStationTicks(ticks);
 
-  }, [canvasElement, gridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints, showDensityOverlay]);
+  }, [canvasElement, gridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, chartStyles.profileBoundPenalty, activeStations2D, stationJitteredCoords2D, highResBathyPoints, showDensityOverlay]);
 
 
 
@@ -5453,27 +5719,16 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
     const {
-
       gridValues,
-
       gridDistSq,
-
       minX,
-
       xSpan,
-
       minY,
-
       ySpan,
-
       labelsList,
-
       sampleDots,
-
       ticks,
-
-      validSamples
-
+      correctedBathyPoints
     } = unfilteredGridData;
 
 
@@ -5824,46 +6079,12 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     let bathyPoints: { cx: number; cy: number }[] = [];
 
-
-
-    if (highResBathyPoints && highResBathyPoints.length > 0) {
-
-      bathyPoints = highResBathyPoints.map(pt => {
-
+    if (correctedBathyPoints && correctedBathyPoints.length > 0) {
+      bathyPoints = correctedBathyPoints.map(pt => {
         const cx = invertXAxis2D ? (1 - (pt.xVal - minX) / xSpan) * canvasWidth : ((pt.xVal - minX) / xSpan) * canvasWidth;
-
         const cy = ((pt.depth - minY) / ySpan) * canvasHeight;
-
         return { cx, cy };
-
       });
-
-    } else {
-
-      bathyPoints = activeStations2D.map(st => {
-
-        const normSt = normalizeStationName(st);
-
-        const stSamples = validSamples.filter(s => normalizeStationName(s.station) === normSt);
-
-        const stCoords = stationCoords.filter(c => normalizeStationName(c.station) === normSt);
-
-        const botDepthVal = stCoords.find(c => c.botDepth !== undefined)?.botDepth
-
-          || Math.max(...stSamples.map(s => s.depth || 0), 100);
-
-
-
-        const xVal = stationJitteredCoords2D[st] || 0;
-
-        const cx = invertXAxis2D ? (1 - (xVal - minX) / xSpan) * canvasWidth : ((xVal - minX) / xSpan) * canvasWidth;
-
-        const cy = ((botDepthVal - minY) / ySpan) * canvasHeight;
-
-        return { cx, cy };
-
-      });
-
     }
 
 
@@ -5896,7 +6117,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     setUnfilteredTopStationTicks(ticks);
 
-  }, [unfilteredCanvasElement, showUnfilteredComparison, unfilteredGridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
+  }, [unfilteredCanvasElement, showUnfilteredComparison, unfilteredGridData, docMin, docMax, contourStep, chartStyles.colormap, chartStyles.colorBanding, chartStyles.maskDistance, chartStyles.profileBoundPenalty, activeStations2D, stationJitteredCoords2D, highResBathyPoints]);
 
 
 
@@ -6310,7 +6531,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
           >
 
-            <Map size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+            <MapIcon size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
 
             <span>2D 断面彩色等值线分布图</span>
 
@@ -9854,6 +10075,56 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                     />
 
                     <p style={{ margin: '2px 0 0 0', fontSize: '9.5px', color: '#94a3b8' }}>阈值越小，插值边界越靠近实际测量点，越严谨。</p>
+
+                  </div>
+
+
+
+                  {/* profile bound penalty slider */}
+
+                  <div className="input-group">
+
+                    <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+
+                      <span>边界外推惩罚因子 (Penalty)</span>
+
+                      <strong className="text-amber-600">{sliderPenaltyFactor.toFixed(1)}</strong>
+
+                    </label>
+
+                    <input
+
+                      type="range"
+
+                      min="0.0"
+
+                      max="50.0"
+
+                      step="1.0"
+
+                      className="w-full"
+
+                      value={sliderPenaltyFactor}
+
+                      onChange={e => {
+
+                        const val = parseFloat(e.target.value);
+
+                        setSliderPenaltyFactor(val);
+
+                        if (penaltyDebounceTimer.current) clearTimeout(penaltyDebounceTimer.current);
+
+                        penaltyDebounceTimer.current = setTimeout(() => {
+
+                           setChartStyles(prev => ({ ...prev, profileBoundPenalty: val }));
+
+                        }, 60);
+
+                      }}
+
+                    />
+
+                    <p style={{ margin: '2px 0 0 0', fontSize: '9.5px', color: '#94a3b8' }}>值越小，边界过渡越平缓，允许更多外推；值为 0 则完全不惩罚（允许自由外推）。推荐值：1.0~10.0 (较平缓) 或 25.0 (严格边界)。</p>
 
                   </div>
 
