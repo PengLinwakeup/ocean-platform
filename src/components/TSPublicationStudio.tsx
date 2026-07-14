@@ -164,7 +164,14 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
     const findValueByKeywords = (values: Record<string, number>, keywords: string[]): number | undefined => {
       const keys = Object.keys(values);
       for (const keyword of keywords) {
-        const matchedKey = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(keyword));
+        const matchedKey = keys.find(k => {
+          const lowerK = k.toLowerCase();
+          if (lowerK.includes(keyword.toLowerCase())) return true;
+          const strippedK = lowerK.replace(/[^a-z0-9]/g, '');
+          const strippedKeyword = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (strippedKeyword && strippedK.includes(strippedKeyword)) return true;
+          return false;
+        });
         if (matchedKey && values[matchedKey] !== undefined) {
           return values[matchedKey];
         }
@@ -173,8 +180,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
     };
 
     const mapped = hydroSamples.map(h => {
-      const sal = findValueByKeywords(h.values, ['salinity', 'sal']);
-      const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c']);
+      const sal = findValueByKeywords(h.values, ['salinity', 'sal', 's', '盐度', '盐']);
+      const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c', 't', '温度', '温']);
       if (sal === undefined || temp === undefined || isNaN(sal) || isNaN(temp)) return null;
       
       const T = parseFloat(temp.toFixed(4));

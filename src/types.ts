@@ -29,6 +29,9 @@ export interface SampleGroup {
   longitude?: number;
   latitude?: number;
   botDepth?: number;
+  cruise?: string;
+  time?: string;
+  type?: string;
 }
 
 export interface ExcelSampleInfo {
@@ -38,6 +41,9 @@ export interface ExcelSampleInfo {
   longitude: number;
   latitude: number;
   botDepth?: number;
+  cruise?: string;
+  time?: string;
+  type?: string;
 }
 
 export interface StdPoint {
@@ -63,6 +69,9 @@ export interface HydrologicalSample {
   pressure: number;
   values: Record<string, number>;
   botDepth?: number;
+  cruise?: string;
+  time?: string;
+  type?: string;
 }
 
 

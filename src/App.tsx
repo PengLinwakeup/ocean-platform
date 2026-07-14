@@ -4,7 +4,7 @@ import {
   Settings, ChevronLeft, ChevronRight, Check, Printer
 } from 'lucide-react';
 import { parseRawTxt } from './utils/parser';
-import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev } from './utils/calc';
+import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev, calculateAOU } from './utils/calc';
 import { parseStationCoordinates, normalizeStationName, parseHydrologicalExcel } from './utils/stationParser';
 import { RawInjection, SampleGroup, ExcelSampleInfo, HydrologicalSample } from './types';
 import {
@@ -951,16 +951,51 @@ export default function App() {
 
     // Helper to map headers to ODV format
     const mapHeader = (h: string) => {
-      const lower = h.toLowerCase().trim();
-      if (lower.startsWith('lat')) return 'Lat';
-      if (lower.startsWith('long') || lower.startsWith('lon')) return 'Long';
-      if (lower === 'depth' || lower === 'depth (m)') return 'Depth';
-      if (lower.includes('temp')) return 'Temp in sit';
-      if (lower.includes('sal')) return 'Sal';
-      if (lower.includes('ph')) return 'pHTotal cc';
-      if (lower.includes('oxygen') || lower.includes('oxy')) return 'Oxygen (u';
-      if (lower.includes('alkalinity') || lower.includes('alk')) return 'Total Alkalinity';
-      return h;
+      const trimmed = h.trim();
+      const lower = trimmed.toLowerCase();
+      let mapped = trimmed;
+      if (lower.includes('temp')) {
+        mapped = 'Temperature [ITS-90]';
+      } else if (lower.includes('salinity') || lower === 'sal') {
+        mapped = 'Salinity [PSS-78]';
+      } else if (lower.includes('oxygen titration')) {
+        mapped = 'Oxygen titration [µmol/kg]';
+      } else if (lower.includes('oxygen') || lower === 'o2' || lower === 'dox') {
+        mapped = 'Oxygen [µmol/kg]';
+      } else if (lower.includes('fluorescence') || lower === 'fluor') {
+        mapped = 'Fluorescence [µg/L]';
+      } else if (lower.includes('potential density')) {
+        mapped = 'Potential Density [kg/m^3]';
+      } else if (lower.includes('in-situ density')) {
+        mapped = 'In-situ Density [kg/m^3]';
+      } else if (lower.includes('turbidity')) {
+        mapped = 'Turbidity [NTU]';
+      } else if (lower.includes('alkalinity')) {
+        mapped = 'Total Alkalinity [µmol/kg]';
+      } else if (lower === 'ph') {
+        mapped = 'pH';
+      } else {
+        mapped = trimmed.replace(/\(([^)]+)\)$/, '[$1]');
+      }
+      return mapped;
+    };
+
+    const findValueByKeywords = (values: Record<string, number>, keywords: string[]): number | undefined => {
+      const keys = Object.keys(values);
+      for (const keyword of keywords) {
+        const matchedKey = keys.find(k => {
+          const lowerK = k.toLowerCase();
+          if (lowerK.includes(keyword.toLowerCase())) return true;
+          const strippedK = lowerK.replace(/[^a-z0-9]/g, '');
+          const strippedKeyword = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+          if (strippedKeyword && strippedK.includes(strippedKeyword)) return true;
+          return false;
+        });
+        if (matchedKey && values[matchedKey] !== undefined) {
+          return values[matchedKey];
+        }
+      }
+      return undefined;
     };
 
     // Pre-group hydro samples by normalized station name to avoid O(N) filter on every call
@@ -1020,14 +1055,27 @@ export default function App() {
     finalDataRows.push(
       [],
       ["样品分析结果"],
-      ["样品名称", "站位", "深度 (m)", "使用工作曲线", "Area1", "Area2", "Area3", "Area4", "平均面积", "面积SD", "面积RSD (%)", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
+      ["样品名称", "站位", "深度 (m)", "AOU (µmol/kg)", "使用工作曲线", "Area1", "Area2", "Area3", "Area4", "平均面积", "面积SD", "面积RSD (%)", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
     );
 
     sortedProcessedSamples.forEach(s => {
+      const closest = findHydroDataForSample(s.station, s.depth);
+      let aouValStr = "-";
+      if (closest) {
+        const sal = findValueByKeywords(closest.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
+        const temp = findValueByKeywords(closest.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
+        const o2 = findValueByKeywords(closest.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
+        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
+          const aouVal = calculateAOU(sal, temp, o2, s.depth !== null ? s.depth : undefined);
+          aouValStr = aouVal.toFixed(2);
+        }
+      }
+
       const row = [
         s.sampleName,
         s.station || "-",
         s.depth !== null ? s.depth : "-",
+        aouValStr === "-" ? "-" : parseFloat(aouValStr),
         s.curveName,
         s.injections[0] !== undefined ? s.injections[0] : "",
         s.injections[1] !== undefined ? s.injections[1] : "",
@@ -1086,14 +1134,27 @@ export default function App() {
       ["排序规则", "大趋势：站位从大到小 (ST-50 ➔ ST-1) | 小趋势：同一个站位内深度从深到浅 (深层 ➔ 表层)"],
       ["生成时间", new Date().toLocaleString()],
       [],
-      ["样品名称", "站位", "深度 (m)", "使用工作曲线", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
+      ["样品名称", "站位", "深度 (m)", "AOU (µmol/kg)", "使用工作曲线", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
     ];
 
     sortedSummary.forEach(s => {
+      const closest = findHydroDataForSample(s.station, s.depth);
+      let aouValStr = "-";
+      if (closest) {
+        const sal = findValueByKeywords(closest.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
+        const temp = findValueByKeywords(closest.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
+        const o2 = findValueByKeywords(closest.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
+        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
+          const aouVal = calculateAOU(sal, temp, o2, s.depth !== null ? s.depth : undefined);
+          aouValStr = aouVal.toFixed(2);
+        }
+      }
+
       summaryRows.push([
         s.sampleName,
         s.station,
         s.depth !== null ? s.depth : "-",
+        aouValStr === "-" ? "-" : parseFloat(aouValStr),
         s.curveName,
         parseFloat(s.concentration.toFixed(2)),
         parseFloat(s.error.toFixed(2)),
@@ -1131,24 +1192,37 @@ export default function App() {
     }
 
     // ODV headers
-    const odvHeaders = ['Station', 'Longitude [degrees_east]', 'Latitude [degrees_north]', 'Bot. Depth [m]', 'Depth [m]'];
+    const odvHeaders = [
+      'Cruise',
+      'Station',
+      'Type',
+      'yyyy-mm-ddThh:mm',
+      'Longitude [degrees_east]',
+      'Latitude [degrees_north]',
+      'Bot. Depth [m]',
+      'Depth [m]'
+    ];
     // Add CTD parameters if they exist
     const mappedParamNames = hydroParameters.map(p => mapHeader(p));
     odvHeaders.push(...mappedParamNames);
-    odvHeaders.push('DOC (µmol/L)');
+    odvHeaders.push('DOC [µmol/L]', 'AOU [µmol/kg]');
     odvRows.push(odvHeaders);
 
     // Filter out rejected/standards/blanks for ODV format
     const cleanProcessed = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank && !s.isRejected);
 
     interface OdvExportRow {
+      cruise: string;
       station: string;
+      type: string;
+      time: string;
       lat: number | "";
       lon: number | "";
       botDepth: number | "";
       depth: number;
       ctdValues: Record<string, number>;
       docValue: number | "";
+      aouValue: number | "";
     }
 
     const allRows: OdvExportRow[] = [];
@@ -1174,6 +1248,15 @@ export default function App() {
       }
     });
 
+    // Helper to get fallback cruise number from files
+    const getFallbackCruise = () => {
+      if (files.length > 0) {
+        const cleanName = files[0].name.split('.')[0].replace(/[^a-zA-Z0-9_-]/g, '');
+        return cleanName || '1';
+      }
+      return '1';
+    };
+
     // 1. Process all hydroSamples
     if (hydroSamples && hydroSamples.length > 0) {
       hydroSamples.forEach(h => {
@@ -1196,14 +1279,28 @@ export default function App() {
           }
         }
 
+        // Calculate AOU
+        const sal = findValueByKeywords(h.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
+        const temp = findValueByKeywords(h.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
+        const o2 = findValueByKeywords(h.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
+        
+        let aouVal: number | "" = "";
+        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
+          aouVal = calculateAOU(sal, temp, o2, h.depth);
+        }
+
         allRows.push({
+          cruise: h.cruise || getFallbackCruise(),
           station: h.station,
+          type: h.type || 'C',
+          time: h.time || '',
           lat: h.latitude,
           lon: h.longitude,
           botDepth: botDepthVal,
           depth: h.depth,
           ctdValues: h.values || {},
-          docValue: match ? match.concentration : ""
+          docValue: match ? match.concentration : "",
+          aouValue: aouVal
         });
       });
     }
@@ -1231,14 +1328,29 @@ export default function App() {
         }
       }
 
+      // Calculate AOU if hydroData is available
+      let aouVal: number | "" = "";
+      if (hydroData) {
+        const sal = findValueByKeywords(hydroData.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
+        const temp = findValueByKeywords(hydroData.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
+        const o2 = findValueByKeywords(hydroData.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
+        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
+          aouVal = calculateAOU(sal, temp, o2, s.depth !== null ? s.depth : undefined);
+        }
+      }
+
       allRows.push({
+        cruise: s.cruise || (hydroData && hydroData.cruise) || getFallbackCruise(),
         station: s.station || "",
+        type: s.type || (hydroData && hydroData.type) || 'C',
+        time: s.time || (hydroData && hydroData.time) || '',
         lat: lat !== "" ? Number(lat) : "",
         lon: lon !== "" ? Number(lon) : "",
         botDepth: botDepthVal,
         depth: s.depth !== null ? s.depth : 0,
-        ctdValues: {},
-        docValue: s.concentration
+        ctdValues: hydroData ? (hydroData.values || {}) : {},
+        docValue: s.concentration,
+        aouValue: aouVal
       });
     });
 
@@ -1257,7 +1369,10 @@ export default function App() {
 
     sortedRows.forEach(row => {
       const excelRow: any[] = [
+        row.cruise,
         row.station,
+        row.type,
+        row.time,
         row.lon !== "" ? parseFloat(Number(row.lon).toFixed(6)) : "",
         row.lat !== "" ? parseFloat(Number(row.lat).toFixed(6)) : "",
         row.botDepth !== "" ? parseFloat(Number(row.botDepth).toFixed(1)) : "",
@@ -1273,6 +1388,7 @@ export default function App() {
       });
       
       excelRow.push(row.docValue !== "" ? parseFloat(Number(row.docValue).toFixed(2)) : "");
+      excelRow.push(row.aouValue !== "" ? parseFloat(Number(row.aouValue).toFixed(2)) : "");
       odvRows.push(excelRow);
     });
 

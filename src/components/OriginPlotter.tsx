@@ -10,7 +10,7 @@ import {
 
 import {
   ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis,
-  CartesianGrid, Tooltip, ErrorBar, Legend
+  CartesianGrid, Tooltip, ErrorBar, Legend, Line, ReferenceLine, LineChart as RechartsLineChart
 } from 'recharts';
 
 import { contours } from 'd3-contour';
@@ -20,13 +20,13 @@ import { scaleLinear } from 'd3-scale';
 import { curveCardinal } from 'd3-shape';
 
 import { normalizeStationName } from '../utils/stationParser';
-
 import { interpolateIDW, calculatePotentialDensityAnomaly, calculateAOU, fitCalibrationCurve } from '../utils/calc';
-
 import { ExcelSampleInfo, HydrologicalSample } from '../types';
+import * as xlsx from 'xlsx';
 
 import { StationMap } from './StationMap';
 import TSPublicationStudio from './TSPublicationStudio';
+import { runSampleOMPA, DEFAULT_OMPA_PARAMETERS, OMPAParameters, DEFAULT_INDIAN_OCEAN_WATER_MASSES } from '../utils/ompa';
 
 
 
@@ -833,7 +833,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
   const instanceId = useMemo(() => Math.random().toString(36).substring(2, 9), []);
 
-  const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot'>(() => loadSavedState<'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot'>('ocean_visSubTab', 'profile1d'));
+  const [visSubTab, setVisSubTab] = useState<'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot' | 'ompaAnalysis'>(() => loadSavedState<'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot' | 'ompaAnalysis'>('ocean_visSubTab', 'profile1d'));
 
   const [showDensityOverlay, setShowDensityOverlay] = useState<boolean>(() => loadSavedState<boolean>('ocean_showDensityOverlay', false));
 
@@ -887,26 +887,73 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
-  // Utility to find values in values record by keyword matching
+  // OMPA States
 
-  const findValueByKeywords = (values: Record<string, number>, keywords: string[]): number | undefined => {
+  const [ompaParams, setOmpaParams] = useState<OMPAParameters>(() => {
 
-    const keys = Object.keys(values);
+    const saved = localStorage.getItem('ocean_ompaParams');
 
-    for (const keyword of keywords) {
+    if (saved) {
 
-      const matchedKey = keys.find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes(keyword));
+      try {
 
-      if (matchedKey && values[matchedKey] !== undefined) {
+        return JSON.parse(saved);
 
-        return values[matchedKey];
+      } catch (e) {
+
+        console.error(e);
 
       }
 
     }
 
-    return undefined;
+    return DEFAULT_OMPA_PARAMETERS;
 
+  });
+
+
+
+  const [ompaSelectedStation, setOmpaSelectedStation] = useState<string>(() => loadSavedState<string>('ocean_ompaSelectedStation', ''));
+
+  const [ompaSettingsTab, setOmpaSettingsTab] = useState<'swts' | 'weights'>('swts');
+  const [ompaResultsTab, setOmpaResultsTab] = useState<'fractions' | 'deltaDoc' | 'regress' | 'table'>('fractions');
+
+
+
+  useEffect(() => {
+
+    localStorage.setItem('ocean_ompaParams', JSON.stringify(ompaParams));
+
+  }, [ompaParams]);
+
+
+
+  useEffect(() => {
+
+    localStorage.setItem('ocean_ompaSelectedStation', JSON.stringify(ompaSelectedStation));
+
+  }, [ompaSelectedStation]);
+
+
+
+  // Utility to find values in values record by keyword matching
+
+  const findValueByKeywords = (values: Record<string, number>, keywords: string[]): number | undefined => {
+    const keys = Object.keys(values);
+    for (const keyword of keywords) {
+      const matchedKey = keys.find(k => {
+        const lowerK = k.toLowerCase();
+        if (lowerK.includes(keyword.toLowerCase())) return true;
+        const strippedK = lowerK.replace(/[^a-z0-9]/g, '');
+        const strippedKeyword = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (strippedKeyword && strippedK.includes(strippedKeyword)) return true;
+        return false;
+      });
+      if (matchedKey && values[matchedKey] !== undefined) {
+        return values[matchedKey];
+      }
+    }
+    return undefined;
   };
 
 
@@ -959,6 +1006,315 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
+  const ompaResults = useMemo(() => {
+
+    if (!hydroSamples || hydroSamples.length === 0) {
+
+      return [];
+
+    }
+
+
+
+    return hydroSamples.map(h => {
+      if (h.depth < ompaParams.minDepth) {
+        return { id: h.id, station: h.station, depth: h.depth, success: false, reason: `深度 < ${ompaParams.minDepth}m`, doc: undefined, aou: undefined, deltaDoc: undefined };
+      }
+
+      const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't', '温度', '温']);
+      const sal = findValueByKeywords(h.values, ['salinity', 'sal', 's', '盐度', '盐']);
+      const oxygen = findValueByKeywords(h.values, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
+      const phosphate = findValueByKeywords(h.values, ['phosphate', 'po4', '磷酸盐', '活性磷酸盐', '磷']);
+      const nitrate = findValueByKeywords(h.values, ['nitrate', 'no3', '硝酸盐', '活性硝酸盐', '硝']);
+      const silicate = findValueByKeywords(h.values, ['silicate', 'sio3', 'sio4', 'sil', '硅酸盐', '活性硅酸盐', '硅']);
+
+      if (
+        temp === undefined ||
+        sal === undefined ||
+        oxygen === undefined ||
+        phosphate === undefined ||
+        nitrate === undefined ||
+        silicate === undefined
+      ) {
+        return { id: h.id, station: h.station, depth: h.depth, success: false, reason: '数据不全', doc: undefined, aou: undefined, deltaDoc: undefined };
+      }
+
+
+
+      // Check if there is a matching DOC sample
+
+      const normSt = normalizeStationName(h.station);
+
+      const docMatch = originalProcessedSamples?.find(s => 
+
+        normalizeStationName(s.station) === normSt && 
+
+        s.depth !== null && 
+
+        Math.abs(s.depth - h.depth) < 5
+
+      );
+
+
+
+      const res = runSampleOMPA(
+
+        {
+
+          temperature: temp,
+
+          salinity: sal,
+
+          oxygen,
+
+          phosphate,
+
+          nitrate,
+
+          silicate,
+
+          doc: docMatch ? docMatch.concentration : undefined
+
+        },
+
+        ompaParams
+
+      );
+
+
+
+      return {
+
+        id: h.id,
+
+        station: h.station,
+
+        depth: h.depth,
+
+        longitude: h.longitude,
+
+        latitude: h.latitude,
+
+        doc: docMatch ? docMatch.concentration : undefined,
+
+        temp,
+
+        sal,
+
+        oxygen,
+
+        phosphate,
+
+        nitrate,
+
+        silicate,
+
+        ...res
+
+      };
+
+    });
+
+  }, [hydroSamples, originalProcessedSamples, ompaParams]);
+
+
+
+  const ompaDocData = useMemo(() => {
+
+    return ompaResults.filter(r => r.success && r.doc !== undefined);
+
+  }, [ompaResults]);
+
+
+
+  const ompaRegressStats = useMemo(() => {
+
+    if (ompaDocData.length < 2) return null;
+
+    const xVals = ompaDocData.map(d => d.aou || 0);
+
+    const yVals = ompaDocData.map(d => d.deltaDoc || 0);
+
+    
+
+    const n = xVals.length;
+
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0, sumYY = 0;
+
+    for (let i = 0; i < n; i++) {
+
+      const x = xVals[i];
+
+      const y = yVals[i];
+
+      sumX += x;
+
+      sumY += y;
+
+      sumXY += x * y;
+
+      sumXX += x * x;
+
+      sumYY += y * y;
+
+    }
+
+    
+
+    const denominator = n * sumXX - sumX * sumX;
+
+    if (Math.abs(denominator) < 1e-10) return null;
+
+    
+
+    const slope = (n * sumXY - sumX * sumY) / denominator;
+
+    const intercept = (sumY - slope * sumX) / n;
+
+    
+
+    const meanY = sumY / n;
+
+    let ssTot = 0;
+
+    let ssRes = 0;
+
+    for (let i = 0; i < n; i++) {
+
+      const x = xVals[i];
+
+      const y = yVals[i];
+
+      const predY = slope * x + intercept;
+
+      ssTot += Math.pow(y - meanY, 2);
+
+      ssRes += Math.pow(y - predY, 2);
+
+    }
+
+    
+
+    const rSquared = ssTot > 0 ? 1 - (ssRes / ssTot) : 0;
+
+    
+
+    return { slope, intercept, rSquared, count: n };
+
+  }, [ompaDocData]);
+
+
+
+  const ompaFitLine = useMemo(() => {
+
+    const stats = ompaRegressStats;
+
+    if (!stats || ompaDocData.length === 0) return [];
+
+    
+
+    const xVals = ompaDocData.map(d => d.aou || 0);
+
+    const minX = Math.min(...xVals);
+
+    const maxX = Math.max(...xVals);
+
+    
+
+    return [
+
+      { aou: minX, deltaDoc: stats.slope * minX + stats.intercept },
+
+      { aou: maxX, deltaDoc: stats.slope * maxX + stats.intercept }
+
+    ];
+
+  }, [ompaDocData, ompaRegressStats]);
+
+
+
+  const exportOmpaData = () => {
+
+    const successData = ompaResults.filter((r: any) => r.success);
+
+    if (successData.length === 0) {
+
+      alert("没有计算成功的 OMPA 数据可以导出！");
+
+      return;
+
+    }
+
+
+
+    const exportRows = successData.map((r: any) => {
+
+      const row: any = {
+
+        '站位 (Station)': r.station,
+
+        '深度 (Depth) [m]': r.depth,
+
+        '经度 (Longitude) [°E]': r.longitude,
+
+        '纬度 (Latitude) [°N]': r.latitude,
+
+        '温度 (Temperature) [°C]': r.temp,
+
+        '盐度 (Salinity)': r.sal,
+
+        '溶解氧 (Oxygen) [µmol/kg]': r.oxygen,
+
+        '磷酸盐 (Phosphate) [µmol/L]': r.phosphate,
+
+        '硝酸盐 (Nitrate) [µmol/L]': r.nitrate,
+
+        '硅酸盐 (Silicate) [µmol/L]': r.silicate,
+
+        'Delta P [µmol/L]': r.deltaP !== undefined ? parseFloat(r.deltaP.toFixed(4)) : 0,
+
+        'AOU [µmol/kg]': r.aou !== undefined ? parseFloat(r.aou.toFixed(2)) : 0,
+
+        'DOC 观测值 [µmol/L]': r.doc !== undefined ? parseFloat(r.doc.toFixed(2)) : 'N/A',
+
+        'DOC 保守值 [µmol/L]': r.conservativeDoc !== undefined ? parseFloat(r.conservativeDoc.toFixed(2)) : 0,
+
+        'Delta DOC [µmol/L]': r.doc !== undefined ? parseFloat(r.deltaDoc.toFixed(2)) : 'N/A',
+
+        '拟合残差平方和 (RSS)': r.residual !== undefined ? parseFloat(r.residual.toFixed(4)) : 0
+
+      };
+
+
+
+      // Add fractions
+
+      ompaParams.waterMasses.forEach((wm: any) => {
+
+        row[`水团占比 ${wm.name}`] = r.fractions[wm.name] !== undefined ? parseFloat((r.fractions[wm.name] * 100).toFixed(2)) + '%' : '0%';
+
+      });
+
+
+
+      return row;
+
+    });
+
+
+
+    const worksheet = xlsx.utils.json_to_sheet(exportRows);
+
+    const workbook = xlsx.utils.book_new();
+
+    xlsx.utils.book_append_sheet(workbook, worksheet, "OMPA_Results");
+
+    xlsx.writeFile(workbook, "OMPA_Analysis_Report.xlsx");
+
+  };
+
+
+
   const allParameters = useMemo(() => {
 
     const list: string[] = [];
@@ -981,9 +1337,31 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     }
 
+
+
+    // Add OMPA parameters to the dropdown list
+
+    if (isHydroMode && hydroSamples && hydroSamples.length > 0) {
+
+      ompaParams.waterMasses.forEach(wm => {
+
+        list.push(`OMPA: ${wm.name} 占比 (%)`);
+
+      });
+
+      list.push("OMPA: ΔDOC (µmol/L)");
+
+      list.push("OMPA: OMPA-AOU (µmol/kg)");
+
+      list.push("OMPA: Delta P (µmol/L)");
+
+    }
+
+
+
     return list;
 
-  }, [originalProcessedSamples, hydroParameters]);
+  }, [originalProcessedSamples, hydroParameters, isHydroMode, hydroSamples, ompaParams]);
 
 
 
@@ -1037,6 +1415,76 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     }
 
+
+
+    if (selectedHydroParam.startsWith("OMPA: ")) {
+
+      const paramName = selectedHydroParam.replace("OMPA: ", "");
+
+      return ompaResults.map((r: any) => {
+
+        let val = 0;
+
+        if (r.success) {
+
+          if (paramName.endsWith("占比 (%)")) {
+
+            const wmName = paramName.replace(" 占比 (%)", "");
+
+            val = (r.fractions[wmName] || 0) * 100;
+
+          } else if (paramName.includes("ΔDOC")) {
+
+            val = r.deltaDoc || 0;
+
+          } else if (paramName.includes("OMPA-AOU")) {
+
+            val = r.aou || 0;
+
+          } else if (paramName.includes("Delta P")) {
+
+            val = r.deltaP || 0;
+
+          }
+
+        }
+
+        return {
+
+          id: r.id,
+
+          station: r.station,
+
+          depth: r.depth,
+
+          concentration: val,
+
+          error: 0,
+
+          rsd: 0,
+
+          isRejected: !r.success,
+
+          isBlank: false,
+
+          isStd: false,
+
+          isSeawater: false,
+
+          sampleName: `${r.station} (${r.depth}m)`,
+
+          longitude: r.longitude,
+
+          latitude: r.latitude
+
+        };
+
+      });
+
+    }
+
+
+
     return hydroSamples.map(h => ({
 
       id: h.id,
@@ -1067,7 +1515,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     }));
 
-  }, [hydroSamples, originalProcessedSamples, selectedHydroParam, isHydroMode]);
+  }, [hydroSamples, originalProcessedSamples, selectedHydroParam, isHydroMode, ompaResults]);
 
 
 
@@ -1183,7 +1631,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     timestamp: string;
 
-    visSubTab: 'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot';
+    visSubTab: 'profile1d' | 'contour2d' | 'tsPlot' | 'aouDocPlot' | 'ompaAnalysis';
 
     docMin: number;
 
@@ -2071,9 +2519,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     return hydroSamples.map(h => {
 
-      const sal = findValueByKeywords(h.values, ['salinity', 'sal']);
+      const sal = findValueByKeywords(h.values, ['salinity', 'sal', 's', '盐度', '盐']);
 
-      const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c']);
+      const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c', 't', '温度', '温']);
 
       if (sal === undefined || temp === undefined || isNaN(sal) || isNaN(temp)) return null;
 
@@ -2117,11 +2565,11 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       if (!closest) return null;
 
-      const sal = findValueByKeywords(closest.values, ['salinity', 'sal']);
+      const sal = findValueByKeywords(closest.values, ['salinity', 'sal', 's', '盐度', '盐']);
 
-      const temp = findValueByKeywords(closest.values, ['temperature', 'temp', 't°c']);
+      const temp = findValueByKeywords(closest.values, ['temperature', 'temp', 't°c', 't', '温度', '温']);
 
-      const o2 = findValueByKeywords(closest.values, ['oxygen', 'o2', 'dox', 'd.o']);
+      const o2 = findValueByKeywords(closest.values, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
 
       if (sal === undefined || temp === undefined || o2 === undefined || isNaN(sal) || isNaN(temp) || isNaN(o2)) return null;
 
@@ -2951,6 +3399,14 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       
 
+      if (!ompaSelectedStation) {
+
+        setOmpaSelectedStation(sortedStationsList[0]);
+
+      }
+
+
+
       if (selectedStationsMulti.length === 0) {
 
         setSelectedStationsMulti(sortedStationsList.slice(0, Math.min(3, sortedStationsList.length)));
@@ -2973,7 +3429,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
     }
 
-  }, [sortedStationsList]);
+  }, [sortedStationsList, ompaSelectedStation]);
 
   // Compute data bounds
 
@@ -4105,9 +4561,9 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
       if (closestHydro) {
 
-        const sal = findValueByKeywords(closestHydro.values, ['salinity', 'sal']);
+        const sal = findValueByKeywords(closestHydro.values, ['salinity', 'sal', 's', '盐度', '盐']);
 
-        const temp = findValueByKeywords(closestHydro.values, ['temperature', 'temp', 't°c']);
+        const temp = findValueByKeywords(closestHydro.values, ['temperature', 'temp', 't°c', 't', '温度', '温']);
 
         if (sal !== undefined && temp !== undefined) {
 
@@ -6562,6 +7018,20 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
 
             <span>AOU vs. DOC 降解关系图</span>
+
+          </div>
+
+          <div
+
+            className={`tab-btn ${visSubTab === 'ompaAnalysis' ? 'active' : ''}`}
+
+            onClick={() => setVisSubTab('ompaAnalysis')}
+
+          >
+
+            <LineChart size={16} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+
+            <span>OMPA/eOMPA 水团解析</span>
 
           </div>
 
@@ -13827,6 +14297,1470 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
             </div>
           </div>
         </div>
+      )}
+
+
+
+      {visSubTab === 'ompaAnalysis' && (
+
+        <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: '24px', alignItems: 'start', fontFamily: chartStyles.fontFamily || 'system-ui, sans-serif' }}>
+
+          {/* Left panel: OMPA configuration */}
+
+          <div className="card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+            <div style={{ borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
+
+              <h4 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#0f172a' }}>
+
+                OMPA/eOMPA 水团解析配置
+
+              </h4>
+
+              <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', lineHeight: '1.4' }}>
+
+                通过非负最小二乘法 (NNLS) 计算各水样中不同核心水团的物理混合占比与非保守生物地球化学异常。
+
+              </p>
+
+            </div>
+
+
+
+            {/* Config Sub-tabs */}
+
+            <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '8px' }}>
+
+              <button
+
+                onClick={() => setOmpaSettingsTab('swts')}
+
+                className={`tab-btn ${ompaSettingsTab === 'swts' ? 'active' : ''}`}
+
+                style={{
+
+                  flex: 1,
+
+                  padding: '6px 12px',
+
+                  fontSize: '11px',
+
+                  fontWeight: 'bold',
+
+                  background: 'none',
+
+                  border: 'none',
+
+                  borderBottom: ompaSettingsTab === 'swts' ? '2px solid var(--primary-color, #0284c7)' : 'none',
+
+                  color: ompaSettingsTab === 'swts' ? 'var(--primary-color, #0284c7)' : '#64748b',
+
+                  cursor: 'pointer'
+
+                }}
+
+              >
+
+                核心水团端员 (SWTs)
+
+              </button>
+
+              <button
+
+                onClick={() => setOmpaSettingsTab('weights')}
+
+                className={`tab-btn ${ompaSettingsTab === 'weights' ? 'active' : ''}`}
+
+                style={{
+
+                  flex: 1,
+
+                  padding: '6px 12px',
+
+                  fontSize: '11px',
+
+                  fontWeight: 'bold',
+
+                  background: 'none',
+
+                  border: 'none',
+
+                  borderBottom: ompaSettingsTab === 'weights' ? '2px solid var(--primary-color, #0284c7)' : 'none',
+
+                  color: ompaSettingsTab === 'weights' ? 'var(--primary-color, #0284c7)' : '#64748b',
+
+                  cursor: 'pointer'
+
+                }}
+
+              >
+
+                权重与红菲尔德比
+
+              </button>
+
+            </div>
+
+
+
+            {ompaSettingsTab === 'swts' && (
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '550px', overflowY: 'auto', paddingRight: '4px' }}>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+                  <span style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569' }}>水团定义列表：</span>
+
+                  <button
+
+                    onClick={() => {
+
+                      if (window.confirm("确定恢复默认的印度洋水团参数吗？")) {
+
+                        setOmpaParams(prev => ({ ...prev, waterMasses: DEFAULT_INDIAN_OCEAN_WATER_MASSES }));
+
+                      }
+
+                    }}
+
+                    className="btn btn-secondary py-1 px-2"
+
+                    style={{ fontSize: '10px' }}
+
+                  >
+
+                    恢复默认值
+
+                  </button>
+
+                </div>
+
+
+
+                {ompaParams.waterMasses.map((wm, idx) => (
+
+                  <div key={wm.name} style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', backgroundColor: '#f8fafc', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: '4px' }}>
+
+                      <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+
+                        <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: ['#38bdf8', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'][idx % 7] }}></span>
+
+                        {wm.name}
+
+                      </span>
+
+                      <button
+
+                        onClick={() => {
+
+                          setOmpaParams(prev => ({
+
+                            ...prev,
+
+                            waterMasses: prev.waterMasses.filter(x => x.name !== wm.name)
+
+                          }));
+
+                        }}
+
+                        style={{ color: '#ef4444', border: 'none', background: 'none', cursor: 'pointer', fontSize: '10px' }}
+
+                      >
+
+                        删除
+
+                      </button>
+
+                    </div>
+
+
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>温度 (T) [°C]</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.temperature}
+
+                          step="0.05"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, temperature: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>盐度 (S)</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.salinity}
+
+                          step="0.01"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, salinity: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>溶解氧 [µmol/kg]</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.oxygen}
+
+                          step="1"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, oxygen: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>DOC [µmol/L]</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.doc}
+
+                          step="0.5"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, doc: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>磷酸盐 [µmol/L]</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.phosphate}
+
+                          step="0.05"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, phosphate: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>硝酸盐 [µmol/L]</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.nitrate}
+
+                          step="0.5"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, nitrate: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                        <label style={{ fontSize: '9px', color: '#64748b' }}>硅酸盐 [µmol/L]</label>
+
+                        <input
+
+                          type="number"
+
+                          value={wm.silicate}
+
+                          step="1"
+
+                          onChange={e => {
+
+                            const val = parseFloat(e.target.value);
+
+                            setOmpaParams(prev => ({
+
+                              ...prev,
+
+                              waterMasses: prev.waterMasses.map(x => x.name === wm.name ? { ...x, silicate: val } : x)
+
+                            }));
+
+                          }}
+
+                          style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                        />
+
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                ))}
+
+
+
+                {/* Add new SWT button */}
+
+                <button
+
+                  onClick={() => {
+
+                    const name = prompt("请输入新水团名称：", "NEW_SWT");
+
+                    if (name) {
+
+                      if (ompaParams.waterMasses.some(x => x.name === name)) {
+
+                        alert("水团名称不能重复！");
+
+                        return;
+
+                      }
+
+                      setOmpaParams(prev => ({
+
+                        ...prev,
+
+                        waterMasses: [...prev.waterMasses, {
+
+                          name,
+
+                          temperature: 5.0,
+
+                          salinity: 34.5,
+
+                          oxygen: 200.0,
+
+                          phosphate: 1.5,
+
+                          nitrate: 20.0,
+
+                          silicate: 30.0,
+
+                          doc: 45.0
+
+                        }]
+
+                      }));
+
+                    }
+
+                  }}
+
+                  className="btn btn-primary w-full py-2 text-xs"
+
+                >
+
+                  + 新增水团端员
+
+                </button>
+
+              </div>
+
+            )}
+
+
+
+            {ompaSettingsTab === 'weights' && (
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+                <h5 style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', margin: '0 0 -4px 0' }}>方程权重配比：</h5>
+
+                
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>温度 (T) 权重:</span>
+
+                    <strong className="text-sky-600">{ompaParams.weights.temperature}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="1" max="100" value={ompaParams.weights.temperature}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, temperature: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>盐度 (S) 权重:</span>
+
+                    <strong className="text-sky-600">{ompaParams.weights.salinity}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="1" max="100" value={ompaParams.weights.salinity}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, salinity: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>溶解氧 (O₂) 权重:</span>
+
+                    <strong className="text-sky-600">{ompaParams.weights.oxygen}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="1" max="100" value={ompaParams.weights.oxygen}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, oxygen: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>磷酸载体 (PO₄) 权重:</span>
+
+                    <strong className="text-sky-600">{ompaParams.weights.phosphate}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="1" max="100" value={ompaParams.weights.phosphate}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, phosphate: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>硝酸载体 (NO₃) 权重:</span>
+
+                    <strong className="text-sky-600">{ompaParams.weights.nitrate}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="1" max="100" value={ompaParams.weights.nitrate}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, nitrate: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>硅酸载体 (Si) 权重:</span>
+
+                    <strong className="text-sky-600">{ompaParams.weights.silicate}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="1" max="100" value={ompaParams.weights.silicate}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, silicate: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+
+                    <span>质量守恒等式 (Sum=1) 权重:</span>
+
+                    <strong className="text-emerald-600">{ompaParams.weights.mass}</strong>
+
+                  </div>
+
+                  <input
+
+                    type="range" min="10" max="500" value={ompaParams.weights.mass}
+
+                    onChange={e => setOmpaParams(prev => ({ ...prev, weights: { ...prev.weights, mass: parseInt(e.target.value) } }))}
+
+                    style={{ width: '100%' }}
+
+                  />
+
+                </div>
+
+
+
+                <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '10px', marginTop: '6px' }}>
+
+                  <h5 style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569', margin: '0 0 8px 0' }}>生物地球化学红菲尔德比:</h5>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                      <label style={{ fontSize: '9px', color: '#64748b' }}>-O₂ : P</label>
+
+                      <input
+
+                        type="number" value={ompaParams.redfieldRatios.op} step="5"
+
+                        onChange={e => setOmpaParams(prev => ({ ...prev, redfieldRatios: { ...prev.redfieldRatios, op: parseFloat(e.target.value) || 170 } }))}
+
+                        style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                      />
+
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                      <label style={{ fontSize: '9px', color: '#64748b' }}>N : P</label>
+
+                      <input
+
+                        type="number" value={ompaParams.redfieldRatios.np} step="1"
+
+                        onChange={e => setOmpaParams(prev => ({ ...prev, redfieldRatios: { ...prev.redfieldRatios, np: parseFloat(e.target.value) || 16 } }))}
+
+                        style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                      />
+
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                      <label style={{ fontSize: '9px', color: '#64748b' }}>Si : P</label>
+
+                      <input
+
+                        type="number" value={ompaParams.redfieldRatios.sip} step="1"
+
+                        onChange={e => setOmpaParams(prev => ({ ...prev, redfieldRatios: { ...prev.redfieldRatios, sip: parseFloat(e.target.value) || 40 } }))}
+
+                        style={{ padding: '3px 6px', fontSize: '11px', border: '1px solid #cbd5e1', borderRadius: '4px' }}
+
+                      />
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+
+
+                <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '10px', marginTop: '6px' }}>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#475569' }}>解析起始水深限制 [m] (Min Depth)</label>
+
+                    <input
+
+                      type="number" value={ompaParams.minDepth} step="50" min="0"
+
+                      onChange={e => setOmpaParams(prev => ({ ...prev, minDepth: parseInt(e.target.value) ?? 200 }))}
+
+                      style={{ padding: '4px 8px', fontSize: '12px', border: '1px solid #cbd5e1', borderRadius: '6px', width: '120px' }}
+
+                    />
+
+                  </div>
+
+                </div>
+
+              </div>
+
+            )}
+
+          </div>
+
+
+
+          {/* Right panel: Results */}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+            <div className="card" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+
+              {/* View sub-tabs */}
+
+              <div className="tab-group" style={{ margin: 0 }}>
+
+                <button
+
+                  onClick={() => setOmpaResultsTab('fractions')}
+
+                  className={`tab-btn ${ompaResultsTab === 'fractions' ? 'active' : ''}`}
+
+                >
+
+                  水团占比剖面图
+
+                </button>
+
+                <button
+
+                  onClick={() => setOmpaResultsTab('deltaDoc')}
+
+                  className={`tab-btn ${ompaResultsTab === 'deltaDoc' ? 'active' : ''}`}
+
+                >
+
+                  ΔDOC 降解剖面图
+
+                </button>
+
+                <button
+
+                  onClick={() => setOmpaResultsTab('regress')}
+
+                  className={`tab-btn ${ompaResultsTab === 'regress' ? 'active' : ''}`}
+
+                >
+
+                  ΔDOC vs. AOU 拟合
+
+                </button>
+
+                <button
+
+                  onClick={() => setOmpaResultsTab('table')}
+
+                  className={`tab-btn ${ompaResultsTab === 'table' ? 'active' : ''}`}
+
+                >
+
+                  解析数据列表
+
+                </button>
+
+              </div>
+
+
+
+              {/* Controls */}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+
+                {ompaResultsTab === 'fractions' && (
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+
+                    <span style={{ fontSize: '11px', fontWeight: 'semibold', color: '#475569' }}>选择观测站：</span>
+
+                    <select
+
+                      value={ompaSelectedStation}
+
+                      onChange={e => setOmpaSelectedStation(e.target.value)}
+
+                      style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px', cursor: 'pointer' }}
+
+                    >
+
+                      {sortedStationsList.map(st => (
+
+                        <option key={st} value={st}>{st}</option>
+
+                      ))}
+
+                    </select>
+
+                  </div>
+
+                )}
+
+                <button
+
+                  onClick={exportOmpaData}
+
+                  className="btn btn-secondary py-1.5 px-3 text-xs"
+
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+
+                >
+
+                  <Download size={14} />
+
+                  导出 OMPA 解析结果
+
+                </button>
+
+              </div>
+
+            </div>
+
+
+
+            {/* Plot/Table Views */}
+
+            <div className="card" style={{ padding: '20px', minHeight: '520px', display: 'flex', flexDirection: 'column' }}>
+
+              {ompaResultsTab === 'fractions' && (
+
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#1e293b' }}>
+
+                      站位 {ompaSelectedStation || '未选'} 的垂直水团混合占比剖面图
+
+                    </span>
+
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>
+
+                      仅分析深度 &ge; {ompaParams.minDepth}m 的水样
+
+                    </span>
+
+                  </div>
+
+                  <div style={{ flex: 1, height: '450px' }}>
+
+                    {(() => {
+
+                      const stData = ompaResults
+
+                        .filter((r: any) => r.station === ompaSelectedStation && r.success)
+
+                        .map((r: any) => {
+
+                          const row: any = { depth: r.depth };
+
+                          ompaParams.waterMasses.forEach((wm: any) => {
+
+                            row[wm.name] = r.fractions[wm.name] || 0;
+
+                          });
+
+                          return row;
+
+                        })
+
+                        .sort((a, b) => a.depth - b.depth);
+
+
+
+                      if (stData.length === 0) {
+
+                        return (
+
+                          <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8', fontSize: '13px' }}>
+
+                            该站位在该深度限制下没有合格的温盐及化学测量数据。
+
+                          </div>
+
+                        );
+
+                      }
+
+
+
+                      return (
+
+                        <ResponsiveContainer width="100%" height="100%">
+
+                          <RechartsLineChart layout="vertical" data={stData} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+
+                            <XAxis
+
+                              type="number"
+
+                              domain={[0, 1]}
+
+                              tickFormatter={v => (v * 100).toFixed(0) + '%'}
+
+                              label={{ value: '水团比例 (Fractions)', position: 'insideBottom', offset: -10, fill: '#334155', fontSize: 11, fontWeight: 'bold' }}
+
+                            />
+
+                            <YAxis
+
+                              type="number"
+
+                              dataKey="depth"
+
+                              reversed
+
+                              domain={['auto', 0]}
+
+                              label={{ value: '深度 (Depth) [m]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 11, fontWeight: 'bold' }}
+
+                            />
+
+                            <Tooltip
+
+                              formatter={(value: any, name: any) => [(value * 100).toFixed(1) + '%', name]}
+
+                              labelFormatter={(label) => `深度: ${label} m`}
+
+                            />
+
+                            <Legend verticalAlign="top" height={36} iconType="circle" />
+
+                            {ompaParams.waterMasses.map((wm, idx) => (
+
+                              <Line
+
+                                key={wm.name}
+
+                                type="monotone"
+
+                                dataKey={wm.name}
+
+                                stroke={['#38bdf8', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'][idx % 7]}
+
+                                strokeWidth={2.5}
+
+                                activeDot={{ r: 6 }}
+
+                                connectNulls
+
+                              />
+
+                            ))}
+
+                          </RechartsLineChart>
+
+                        </ResponsiveContainer>
+
+                      );
+
+                    })()}
+
+                  </div>
+
+                </div>
+
+              )}
+
+
+
+              {ompaResultsTab === 'deltaDoc' && (
+
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#1e293b' }}>
+
+                      溶解有机碳非保守异常值 (ΔDOC) 垂直分布剖面
+
+                    </span>
+
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>
+
+                      计算方程: ΔDOC = DOC观测值 - 保守混合估计值。负值代表DOC自水团形成后被微生物净消耗。
+
+                    </span>
+
+                  </div>
+
+                  <div style={{ flex: 1, height: '450px' }}>
+
+                    {(() => {
+
+                      const validPoints = ompaResults.filter((r: any) => r.success && r.doc !== undefined);
+
+                      if (validPoints.length === 0) {
+
+                        return (
+
+                          <div style={{ height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8', fontSize: '13px' }}>
+
+                            没有匹配到包含 DOC 观测数据的瓶水样。请导入瓶样 DOC 数据与对应的温盐背景文件。
+
+                          </div>
+
+                        );
+
+                      }
+
+
+
+                      return (
+
+                        <ResponsiveContainer width="100%" height="100%">
+
+                          <ScatterChart margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+
+                            <XAxis
+
+                              type="number"
+
+                              dataKey="deltaDoc"
+
+                              domain={['auto', 'auto']}
+
+                              label={{ value: 'ΔDOC [µmol/L]', position: 'insideBottom', offset: -10, fill: '#334155', fontSize: 11, fontWeight: 'bold' }}
+
+                            />
+
+                            <YAxis
+
+                              type="number"
+
+                              dataKey="depth"
+
+                              reversed
+
+                              domain={['auto', 0]}
+
+                              label={{ value: '深度 (Depth) [m]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 11, fontWeight: 'bold' }}
+
+                            />
+
+                            <ReferenceLine x={0} stroke="#94a3b8" strokeDasharray="3 3" />
+
+                            <Tooltip
+
+                              cursor={{ strokeDasharray: '3 3' }}
+
+                              content={({ active, payload }) => {
+
+                                if (active && payload && payload.length) {
+
+                                  const data = payload[0].payload;
+
+                                  return (
+
+                                    <div style={{ background: '#0f172a', color: '#fff', padding: '8px 12px', borderRadius: '6px', fontSize: '11px' }}>
+
+                                      <div>站位: {data.station}</div>
+
+                                      <div>深度: {data.depth} m</div>
+
+                                      <div>DOC 观测值: {data.doc?.toFixed(2)} µmol/L</div>
+
+                                      <div>保守混合值: {data.conservativeDoc?.toFixed(2)} µmol/L</div>
+
+                                      <div style={{ fontWeight: 'bold', color: '#ef4444', borderTop: '1px solid #334155', marginTop: '4px', paddingTop: '4px' }}>
+
+                                        ΔDOC: {data.deltaDoc?.toFixed(2)} µmol/L
+
+                                      </div>
+
+                                    </div>
+
+                                  );
+
+                                }
+
+                                return null;
+
+                              }}
+
+                            />
+
+                            <Scatter name="ΔDOC" data={validPoints} fill="#ef4444" shape="circle" />
+
+                          </ScatterChart>
+
+                        </ResponsiveContainer>
+
+                      );
+
+                    })()}
+
+                  </div>
+
+                </div>
+
+              )}
+
+
+
+              {ompaResultsTab === 'regress' && (
+
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#1e293b' }}>
+
+                      ΔDOC vs. OMPA-AOU 线性拟合与呼吸化学计量估算
+
+                    </span>
+
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>
+
+                      估算DOC对于深海氧气消耗的贡献率。
+
+                    </span>
+
+                  </div>
+
+                  {ompaRegressStats ? (
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '20px' }}>
+
+                      <div style={{ height: '420px' }}>
+
+                        <ResponsiveContainer width="100%" height="100%">
+
+                          <ScatterChart margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+
+                            <XAxis
+
+                              type="number"
+
+                              dataKey="aou"
+
+                              domain={['auto', 'auto']}
+
+                              label={{ value: 'OMPA-Calculated AOU [µmol/kg]', position: 'insideBottom', offset: -10, fill: '#334155', fontSize: 11, fontWeight: 'bold' }}
+
+                            />
+
+                            <YAxis
+
+                              type="number"
+
+                              dataKey="deltaDoc"
+
+                              domain={['auto', 'auto']}
+
+                              label={{ value: 'ΔDOC [µmol/L]', angle: -90, position: 'insideLeft', offset: 0, fill: '#334155', fontSize: 11, fontWeight: 'bold' }}
+
+                            />
+
+                            <Tooltip
+
+                              cursor={{ strokeDasharray: '3 3' }}
+
+                              content={({ active, payload }) => {
+
+                                if (active && payload && payload.length) {
+
+                                  const data = payload[0].payload;
+
+                                  return (
+
+                                    <div style={{ background: '#0f172a', color: '#fff', padding: '8px 12px', borderRadius: '6px', fontSize: '11px' }}>
+
+                                      <div>站位: {data.station}</div>
+
+                                      <div>深度: {data.depth} m</div>
+
+                                      <div>AOU: {data.aou?.toFixed(2)} µmol/kg</div>
+
+                                      <div>ΔDOC: {data.deltaDoc?.toFixed(2)} µmol/L</div>
+
+                                    </div>
+
+                                  );
+
+                                }
+
+                                return null;
+
+                              }}
+
+                            />
+
+                            {/* Fit Line */}
+
+                            {ompaFitLine.length > 0 && (
+
+                              <Scatter
+
+                                name="Best Fit Line"
+
+                                data={ompaFitLine}
+
+                                fill="none"
+
+                                line={{ stroke: '#059669', strokeWidth: 2 }}
+
+                                shape={<g />}
+
+                              />
+
+                            )}
+
+                            <Scatter name="水样数据点" data={ompaDocData} fill="#3b82f6" shape="circle" />
+
+                          </ScatterChart>
+
+                        </ResponsiveContainer>
+
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+
+                        <h5 style={{ fontSize: '12px', fontWeight: 'bold', color: '#1e293b', borderBottom: '1px solid #e2e8f0', paddingBottom: '6px', margin: 0 }}>拟合统计结果</h5>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: '#475569' }}>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+
+                            <span>样本点数量 (N):</span>
+
+                            <strong className="text-slate-800">{ompaRegressStats.count}</strong>
+
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+
+                            <span>斜率 (Slope, ΔDOC/AOU):</span>
+
+                            <strong className="text-slate-800">{ompaRegressStats.slope.toFixed(4)}</strong>
+
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+
+                            <span>截距 (Intercept):</span>
+
+                            <strong className="text-slate-800">{ompaRegressStats.intercept.toFixed(2)}</strong>
+
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+
+                            <span>确定系数 (R²):</span>
+
+                            <strong className="text-slate-800">{ompaRegressStats.rSquared.toFixed(3)}</strong>
+
+                          </div>
+
+                        </div>
+
+
+
+                        <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '10px', marginTop: '4px', fontSize: '11px', lineHeight: '1.4' }}>
+
+                          <div className="alert alert-info py-2" style={{ fontSize: '10.5px' }}>
+
+                            <strong>💡 科学意义：</strong><br />
+
+                            在呼吸化学计量中，ΔDOC / AOU 的斜率可以代表 <strong>DOC 降解对总有机碳呼吸耗氧的贡献率</strong>。<br />
+
+                            当前斜率为 <strong>{ompaRegressStats.slope.toFixed(4)}</strong>，说明在该深度层位内，大洋氧气消耗约有 <strong>{Math.abs(ompaRegressStats.slope * 100).toFixed(1)}%</strong> 是由 DOC 降解支撑的，其余由 POC 沉降支撑。
+
+                          </div>
+
+                        </div>
+
+                      </div>
+
+                    </div>
+
+                  ) : (
+
+                    <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#94a3b8', fontSize: '13px' }}>
+
+                      数据样本量不足（至少需要2个以上有效的 ΔDOC-AOU 配对数据点）来运行回归拟合。
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              )}
+
+
+
+              {ompaResultsTab === 'table' && (
+
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+                  <span style={{ fontSize: '12px', fontWeight: 'semibold', color: '#475569' }}>
+
+                    计算样本表格（共 {ompaResults.filter((r: any) => r.success).length} 条成功数据，{ompaResults.filter((r: any) => !r.success).length} 条不可解析数据）：
+
+                  </span>
+
+                  <div style={{ flex: 1, maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+
+                    <table className="table" style={{ fontSize: '11px', width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+
+                      <thead>
+
+                        <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #cbd5e1' }}>
+
+                          <th style={{ padding: '8px 12px' }}>站位</th>
+
+                          <th style={{ padding: '8px 12px' }}>深度 [m]</th>
+
+                          <th style={{ padding: '8px 12px' }}>温度 [°C]</th>
+
+                          <th style={{ padding: '8px 12px' }}>盐度</th>
+
+                          {ompaParams.waterMasses.map(wm => (
+
+                            <th key={wm.name} style={{ padding: '8px 12px' }}>{wm.name} %</th>
+
+                          ))}
+
+                          <th style={{ padding: '8px 12px' }}>ΔP [µM]</th>
+
+                          <th style={{ padding: '8px 12px' }}>DOC_obs</th>
+
+                          <th style={{ padding: '8px 12px' }}>DOC_cons</th>
+
+                          <th style={{ padding: '8px 12px' }}>ΔDOC</th>
+
+                          <th style={{ padding: '8px 12px' }}>RSS</th>
+
+                        </tr>
+
+                      </thead>
+
+                      <tbody>
+
+                        {ompaResults.map((r: any, idx: number) => {
+
+                          if (!r.success) {
+
+                            return (
+
+                              <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9', color: '#94a3b8', backgroundColor: '#fdf2f2' }}>
+
+                                <td style={{ padding: '6px 12px' }}>{r.station}</td>
+
+                                <td style={{ padding: '6px 12px' }}>{r.depth}</td>
+
+                                <td colSpan={10} style={{ padding: '6px 12px', fontStyle: 'italic', fontSize: '10px' }}>
+
+                                  不可解析: {r.reason}
+
+                                </td>
+
+                              </tr>
+
+                            );
+
+                          }
+
+                          return (
+
+                            <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+
+                              <td style={{ padding: '6px 12px', fontWeight: 'bold' }}>{r.station}</td>
+
+                              <td style={{ padding: '6px 12px' }}>{r.depth}</td>
+
+                              <td style={{ padding: '6px 12px' }}>{r.temp?.toFixed(2)}</td>
+
+                              <td style={{ padding: '6px 12px' }}>{r.sal?.toFixed(3)}</td>
+
+                              {ompaParams.waterMasses.map(wm => (
+
+                                <td key={wm.name} style={{ padding: '6px 12px' }}>
+
+                                  {r.fractions[wm.name] !== undefined ? (r.fractions[wm.name] * 100).toFixed(1) + '%' : '0%'}
+
+                                </td>
+
+                              ))}
+
+                              <td style={{ padding: '6px 12px', color: '#16a34a' }}>{r.deltaP?.toFixed(3)}</td>
+
+                              <td style={{ padding: '6px 12px' }}>{r.doc !== undefined ? r.doc.toFixed(1) : '-'}</td>
+
+                              <td style={{ padding: '6px 12px', color: '#475569' }}>{r.conservativeDoc?.toFixed(1)}</td>
+
+                              <td style={{ padding: '6px 12px', fontWeight: 'bold', color: r.doc !== undefined ? '#ef4444' : '#475569' }}>
+
+                                {r.doc !== undefined ? r.deltaDoc.toFixed(1) : '-'}
+
+                              </td>
+
+                              <td style={{ padding: '6px 12px', color: '#64748b' }}>{r.residual?.toFixed(3)}</td>
+
+                            </tr>
+
+                          );
+
+                        })}
+
+                      </tbody>
+
+                    </table>
+
+                  </div>
+
+                </div>
+
+              )}
+
+            </div>
+
+          </div>
+
+        </div>
+
       )}
 
 

@@ -11,6 +11,12 @@ export function normalizeStationName(name: string | null | undefined): string {
   if (!name) return '';
   const clean = name.toString().toLowerCase().trim();
   
+  // Custom check for SO308/1_14-1 format
+  const so308Match = clean.match(/_(\d+)(?:-\d+)?$/) || clean.match(/_(\d+)-/);
+  if (so308Match && so308Match[1]) {
+    return 'st' + parseInt(so308Match[1], 10);
+  }
+
   // Extract trailing digits/numbers ignoring leading zeros
   const match = clean.match(/(?:station|ctd|st|s|^)[-_:\s]*0*(\d+)/i);
   if (match && match[1]) {
@@ -91,6 +97,14 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
 
   // Find bdCol again if we broke out
   let botDepthCol = -1;
+  let cruiseCol = -1;
+  let typeCol = -1;
+  let timeCol = -1;
+  let yearCol = -1;
+  let monthCol = -1;
+  let dayCol = -1;
+  let hourCol = -1;
+  let minuteCol = -1;
   if (headerRowIndex !== -1) {
     const row = jsonRows[headerRowIndex];
     if (Array.isArray(row)) {
@@ -99,6 +113,14 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
         const c = cell.toString().toLowerCase().replace(/[^a-z0-9]/g, '');
         return (c.includes('bot') || c.includes('bottom')) && (c.includes('depth') || c.includes('深度'));
       });
+      cruiseCol = row.findIndex(cell => cell && (cell.toString().toLowerCase().includes('cruise') || cell.toString().toLowerCase().includes('leg')));
+      typeCol = row.findIndex(cell => cell && cell.toString().toLowerCase() === 'type');
+      timeCol = row.findIndex(cell => cell && (cell.toString().toLowerCase().includes('time') || cell.toString().toLowerCase().includes('date')));
+      yearCol = row.findIndex(cell => cell && cell.toString().toLowerCase() === 'year');
+      monthCol = row.findIndex(cell => cell && cell.toString().toLowerCase() === 'month');
+      dayCol = row.findIndex(cell => cell && cell.toString().toLowerCase() === 'day');
+      hourCol = row.findIndex(cell => cell && cell.toString().toLowerCase() === 'hour');
+      minuteCol = row.findIndex(cell => cell && cell.toString().toLowerCase() === 'minute');
     }
   }
   
@@ -152,6 +174,34 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
       }
     }
     
+    let cruise = '';
+    if (cruiseCol !== -1 && row[cruiseCol] !== undefined && row[cruiseCol] !== null) {
+      cruise = row[cruiseCol].toString().trim();
+    }
+    let type = 'C';
+    if (typeCol !== -1 && row[typeCol] !== undefined && row[typeCol] !== null) {
+      type = row[typeCol].toString().trim();
+    }
+    let sampleTime = '';
+    if (timeCol !== -1 && row[timeCol] !== undefined && row[timeCol] !== null) {
+      const rawTime = row[timeCol];
+      if (rawTime instanceof Date) {
+        sampleTime = rawTime.toISOString().slice(0, 16);
+      } else {
+        sampleTime = rawTime.toString().trim();
+      }
+    } else if (yearCol !== -1 && row[yearCol] !== undefined && row[yearCol] !== null) {
+      const year = parseInt(row[yearCol], 10);
+      const month = monthCol !== -1 && row[monthCol] !== undefined && row[monthCol] !== null ? parseInt(row[monthCol], 10) : 1;
+      const day = dayCol !== -1 && row[dayCol] !== undefined && row[dayCol] !== null ? parseInt(row[dayCol], 10) : 1;
+      const hour = hourCol !== -1 && row[hourCol] !== undefined && row[hourCol] !== null ? parseInt(row[hourCol], 10) : 0;
+      const minute = minuteCol !== -1 && row[minuteCol] !== undefined && row[minuteCol] !== null ? parseInt(row[minuteCol], 10) : 0;
+      if (!isNaN(year)) {
+        const pad = (num: number) => String(num).padStart(2, '0');
+        sampleTime = `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`;
+      }
+    }
+
     if (station && !isNaN(longitude) && !isNaN(latitude)) {
       sampleInfos.push({
         labelId,
@@ -159,7 +209,10 @@ export function parseStationCoordinates(arrayBuffer: ArrayBuffer): ExcelSampleIn
         depth: isNaN(depth) ? 0 : depth,
         longitude,
         latitude,
-        botDepth: botDepth !== undefined && !isNaN(botDepth) ? botDepth : undefined
+        botDepth: botDepth !== undefined && !isNaN(botDepth) ? botDepth : undefined,
+        cruise: cruise || undefined,
+        time: sampleTime || undefined,
+        type: type || undefined
       });
     }
   }
@@ -227,10 +280,20 @@ export function parseHydrologicalExcel(
   const depthCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('depth'));
   const pressCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('pressure'));
   
+  const cruiseCol = headers.findIndex(h => h && (h.toString().toLowerCase().includes('cruise') || h.toString().toLowerCase().includes('leg')));
+  const typeCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'type');
+  const timeCol = headers.findIndex(h => h && (h.toString().toLowerCase().includes('time') || h.toString().toLowerCase().includes('date')));
+  
+  const yearCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'year');
+  const monthCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'month');
+  const dayCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'day');
+  const hourCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'hour');
+  const minuteCol = headers.findIndex(h => h && h.toString().toLowerCase() === 'minute');
+
   // Excluded headers for parameter list
   const excludedHeaders = [
     'station', 'cast', 'sample no', 'ctd cast no', 'ship stn. no.', 'ship stn no', 'niskin bottle no', 'niskin bottle no.',
-    'depth', 'pressure', 'latitude', 'longitude', 'year', 'month', 'day', 'hour', 'minute', 'second', 'flag'
+    'depth', 'pressure', 'latitude', 'longitude', 'year', 'month', 'day', 'hour', 'minute', 'second', 'flag', 'type', 'cruise', 'leg'
   ];
   
   const parameters: string[] = [];
@@ -296,12 +359,47 @@ export function parseHydrologicalExcel(
     const values: Record<string, number> = {};
     parameters.forEach(p => {
       const idx = colIndices[p];
-      const val = parseFloat(row[idx]);
+      const rawVal = row[idx];
+      let val = parseFloat(rawVal);
+      if (rawVal !== undefined && rawVal !== null) {
+        const strVal = rawVal.toString().trim().toUpperCase();
+        if (strVal.includes('LOD') || strVal.startsWith('<')) {
+          val = 0;
+        }
+      }
       if (!isNaN(val)) {
         values[p] = val;
       }
     });
     
+    let cruise = '';
+    if (cruiseCol !== -1 && row[cruiseCol] !== undefined && row[cruiseCol] !== null) {
+      cruise = row[cruiseCol].toString().trim();
+    }
+    let type = 'C';
+    if (typeCol !== -1 && row[typeCol] !== undefined && row[typeCol] !== null) {
+      type = row[typeCol].toString().trim();
+    }
+    let sampleTime = '';
+    if (timeCol !== -1 && row[timeCol] !== undefined && row[timeCol] !== null) {
+      const rawTime = row[timeCol];
+      if (rawTime instanceof Date) {
+        sampleTime = rawTime.toISOString().slice(0, 16);
+      } else {
+        sampleTime = rawTime.toString().trim();
+      }
+    } else if (yearCol !== -1 && row[yearCol] !== undefined && row[yearCol] !== null) {
+      const year = parseInt(row[yearCol], 10);
+      const month = monthCol !== -1 && row[monthCol] !== undefined && row[monthCol] !== null ? parseInt(row[monthCol], 10) : 1;
+      const day = dayCol !== -1 && row[dayCol] !== undefined && row[dayCol] !== null ? parseInt(row[dayCol], 10) : 1;
+      const hour = hourCol !== -1 && row[hourCol] !== undefined && row[hourCol] !== null ? parseInt(row[hourCol], 10) : 0;
+      const minute = minuteCol !== -1 && row[minuteCol] !== undefined && row[minuteCol] !== null ? parseInt(row[minuteCol], 10) : 0;
+      if (!isNaN(year)) {
+        const pad = (num: number) => String(num).padStart(2, '0');
+        sampleTime = `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`;
+      }
+    }
+
     samples.push({
       id: `${selectedSheet}_r${r}_st${station}_d${depth}`,
       station,
@@ -309,7 +407,10 @@ export function parseHydrologicalExcel(
       longitude,
       depth: isNaN(depth) ? 0 : depth,
       pressure: isNaN(pressure) ? 0 : pressure,
-      values
+      values,
+      cruise: cruise || undefined,
+      time: sampleTime || undefined,
+      type: type || undefined
     });
   }
   
