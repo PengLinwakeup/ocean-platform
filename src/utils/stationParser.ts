@@ -277,7 +277,11 @@ export function parseHydrologicalExcel(
   const shipStnCol = headers.findIndex(h => h && h.toString().toLowerCase().replace(/[^a-z0-9]/g, '').includes('shipstn'));
   const latCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('latitude'));
   const lonCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('longitude'));
-  const depthCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('depth'));
+  const depthCol = headers.findIndex(h => {
+    if (!h) return false;
+    const c = h.toString().toLowerCase();
+    return c.includes('depth') && !c.includes('bot') && !c.includes('bottom');
+  });
   const pressCol = headers.findIndex(h => h && h.toString().toLowerCase().includes('pressure'));
   
   const cruiseCol = headers.findIndex(h => h && (h.toString().toLowerCase().includes('cruise') || h.toString().toLowerCase().includes('leg')));

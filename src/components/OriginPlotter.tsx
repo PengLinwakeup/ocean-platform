@@ -2514,43 +2514,28 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
   const tsData = useMemo(() => {
-
     if (!hydroSamples || hydroSamples.length === 0) return [];
 
     return hydroSamples.map(h => {
-
       const sal = findValueByKeywords(h.values, ['salinity', 'sal', 's', '盐度', '盐']);
-
       const temp = findValueByKeywords(h.values, ['temperature', 'temp', 't°c', 't', '温度', '温']);
-
       if (sal === undefined || temp === undefined || isNaN(sal) || isNaN(temp)) return null;
 
-      
+      const oxygen = findValueByKeywords(h.values, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
 
-      let depthGroup = 'Deep (>1000m)';
-
-      if (h.depth < 200) depthGroup = 'Upper (<200m)';
-
-      else if (h.depth <= 1000) depthGroup = 'Intermediate (200-1000m)';
-
-
+      let depthGroup = 'Deep and abyssal (>1500m)';
+      if (h.depth < 500) depthGroup = 'Upper (0-500m)';
+      else if (h.depth <= 1500) depthGroup = 'Intermediate (500-1500m)';
 
       return {
-
         station: h.station,
-
         depth: h.depth,
-
         salinity: parseFloat(sal.toFixed(3)),
-
         temperature: parseFloat(temp.toFixed(3)),
-
-        depthGroup
-
+        depthGroup,
+        oxygen: oxygen !== undefined ? parseFloat(oxygen.toFixed(2)) : undefined
       };
-
-    }).filter(Boolean) as { station: string; depth: number; salinity: number; temperature: number; depthGroup: string }[];
-
+    }).filter(Boolean) as { station: string; depth: number; salinity: number; temperature: number; depthGroup: string; oxygen?: number }[];
   }, [hydroSamples]);
 
 
@@ -2597,11 +2582,11 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
 
-      let depthGroup = 'Deep (>1000m)';
+      let depthGroup = 'Deep and abyssal (>1500m)';
 
-      if (s.depth! < 200) depthGroup = 'Upper (<200m)';
+      if (s.depth! < 500) depthGroup = 'Upper (0-500m)';
 
-      else if (s.depth! <= 1000) depthGroup = 'Intermediate (200-1000m)';
+      else if (s.depth! <= 1500) depthGroup = 'Intermediate (500-1500m)';
 
 
 
@@ -2663,7 +2648,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
 
   const aouDocStats = useMemo(() => {
-    let data = aouDocData.filter(d => d.depthGroup === 'Intermediate (200-1000m)' && d.aou > 0);
+    let data = aouDocData.filter(d => d.depthGroup === 'Intermediate (500-1500m)' && d.aou > 0);
     if (selectedRegionFit === 'wbc') {
       data = data.filter(d => d.region === 'wbc');
     } else if (selectedRegionFit === 'cg') {
@@ -2681,7 +2666,7 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
 
   const overallLine = useMemo(() => {
     if (!aouDocStats) return [];
-    let data = aouDocData.filter(d => d.depthGroup === 'Intermediate (200-1000m)' && d.aou > 0);
+    let data = aouDocData.filter(d => d.depthGroup === 'Intermediate (500-1500m)' && d.aou > 0);
     if (selectedRegionFit === 'wbc') {
       data = data.filter(d => d.region === 'wbc');
     } else if (selectedRegionFit === 'cg') {
@@ -14196,8 +14181,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                     )}
  
                     <Scatter
-                      name="Upper (<200m)"
-                      data={aouDocData.filter(d => d.depthGroup === 'Upper (<200m)')}
+                      name="Upper (0-500m)"
+                      data={aouDocData.filter(d => d.depthGroup === 'Upper (0-500m)')}
                       fill={chartStyles.aouDocUpperColor || '#ea580c'}
                       shape={(props: any) => {
                         const { cx, cy, payload } = props;
@@ -14228,8 +14213,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       }}
                     />
                     <Scatter
-                      name="Intermediate (200-1000m)"
-                      data={aouDocData.filter(d => d.depthGroup === 'Intermediate (200-1000m)')}
+                      name="Intermediate (500-1500m)"
+                      data={aouDocData.filter(d => d.depthGroup === 'Intermediate (500-1500m)')}
                       fill={chartStyles.aouDocIntermediateColor || '#059669'}
                       shape={(props: any) => {
                         const { cx, cy, payload } = props;
@@ -14260,8 +14245,8 @@ export default function OriginPlotter({ processedSamples: originalProcessedSampl
                       }}
                     />
                     <Scatter
-                      name="Deep (>1000m)"
-                      data={aouDocData.filter(d => d.depthGroup === 'Deep (>1000m)')}
+                      name="Deep and abyssal (>1500m)"
+                      data={aouDocData.filter(d => d.depthGroup === 'Deep and abyssal (>1500m)')}
                       fill={chartStyles.aouDocDeepColor || '#1d4ed8'}
                       shape={(props: any) => {
                         const { cx, cy, payload } = props;
