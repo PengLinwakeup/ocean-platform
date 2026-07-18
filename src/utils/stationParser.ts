@@ -238,6 +238,49 @@ export function parseHydrologicalExcel(
   if (sheetNames.length === 0) {
     return { sheetNames: [], selectedSheet: '', parameters: [], samples: [] };
   }
+
+  // Handle merging all sheets
+  if (targetSheetName === '__MERGE_ALL__') {
+    const allParametersSet = new Set<string>();
+    const samplesMap = new Map<string, HydrologicalSample>();
+    
+    for (const sheetName of sheetNames) {
+      const result = parseHydrologicalExcel(arrayBuffer, sheetName);
+      result.parameters.forEach(p => allParametersSet.add(p));
+      
+      result.samples.forEach(sample => {
+        const normSt = normalizeStationName(sample.station);
+        const key = `${normSt}_d${sample.depth.toFixed(1)}`;
+        
+        const existing = samplesMap.get(key);
+        if (existing) {
+          Object.keys(sample.values).forEach(k => {
+            if (sample.values[k] !== undefined && sample.values[k] !== null && !isNaN(sample.values[k])) {
+              if (existing.values[k] === undefined || existing.values[k] === null || isNaN(existing.values[k])) {
+                existing.values[k] = sample.values[k];
+              }
+            }
+          });
+          if (!existing.cruise && sample.cruise) existing.cruise = sample.cruise;
+          if (!existing.time && sample.time) existing.time = sample.time;
+          if (!existing.type && sample.type) existing.type = sample.type;
+        } else {
+          samplesMap.set(key, {
+            ...sample,
+            id: `merged_st${sample.station}_d${sample.depth}`,
+            values: { ...sample.values }
+          });
+        }
+      });
+    }
+    
+    return {
+      sheetNames,
+      selectedSheet: '__MERGE_ALL__',
+      parameters: Array.from(allParametersSet),
+      samples: Array.from(samplesMap.values())
+    };
+  }
   
   const selectedSheet = targetSheetName && sheetNames.includes(targetSheetName) 
     ? targetSheetName 

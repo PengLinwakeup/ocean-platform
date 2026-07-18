@@ -1658,11 +1658,14 @@ export default function App() {
                       className="input-field"
                       value={hydroSelectedSheet}
                       onChange={(e) => handleHydroSheetChange(e.target.value)}
-                      style={{ width: '100%' }}
+                      style={{ width: '100%', fontWeight: hydroSelectedSheet === '__MERGE_ALL__' ? 'bold' : 'normal' }}
                     >
                       {hydroSheetNames.map(name => (
                         <option key={name} value={name}>{name}</option>
                       ))}
+                      {hydroSheetNames.length > 1 && (
+                        <option value="__MERGE_ALL__">✨ 合并所有工作表 (Merge All Sheets)</option>
+                      )}
                     </select>
                   </div>
                   <div style={{ marginTop: '8px' }}>
@@ -1687,7 +1690,7 @@ export default function App() {
                       多参数水文绘图模式已激活
                     </h3>
                     <p className="text-xs text-emerald-700 mb-4" style={{ maxWidth: '320px', margin: '0 auto 12px' }}>
-                      系统已成功从工作表 <strong>{hydroSelectedSheet}</strong> 中解析出 {hydroParameters.length} 个水文参数。
+                      系统已成功从工作表 <strong>{hydroSelectedSheet === '__MERGE_ALL__' ? '合并所有工作表' : hydroSelectedSheet}</strong> 中解析出 {hydroParameters.length} 个水文参数。
                     </p>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'center', maxHeight: '110px', overflowY: 'auto', padding: '4px' }}>
                       {hydroParameters.map((p, idx) => (

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<View xview="0.23" collection="GLODAPv2.2023_Indian_Ocean_filtered_odv_doc_only">
+<GeographicMap>
+<MapDomain lon_min="105.38460" lat_min="-35.67078" lon_max="125.62665" lat_max="-19.59853"/>
+</GeographicMap>
+<MapWindow background_color="15">
+<Symbol small_size="0.333333" size="-0.1" color="1" type="0"/>
+<Window>
+<Geometry y_top="-19.5985252" y_offset_bb="2.5" x_projection="100" x_length_bb="24" x_offset_bb="2" x_right="125.626649" y_bottom="-35.6707787" y_length_bb="17" x_left="105.384603" y_projection="100"/>
+</Window>
+</MapWindow>
+<Section coordinate="2" width="0.012076" bathymetry_name="GEBCO_2023_6x6min_Global.nc">
+<xNodes>110.850419,111.98527,112.795878,114.440255,114.8803</xNodes>
+<yNodes>-22.4480701,-24.6826053,-24.8056073,-32.6572311,-32.7392324</yNodes>
+</Section>
+<BasicVariables>
+<Variable var_name="Depth" keyvar_id="1" max_value="1000.000" min_value="0.000" var_id="0" var_label="Depth [m]"/>
+<Variable var_name="region" keyvar_id="-2147483646" max_value="17.000" min_value="15.000" var_id="1" var_label="region"/>
+<Variable var_name="DOC" keyvar_id="-2147483646" max_value="70.000" min_value="40.000" var_id="84" var_label="DOC [umol/L]"/>
+</BasicVariables>
+<IsoSurfaceVariables>
+<!--region @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="region" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="1" var_label="region"/>
+<!--cast @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="cast" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="2" var_label="cast"/>
+<!--maxsampdepth @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="maxsampdepth" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="3" var_label="maxsampdepth"/>
+<!--Bottle_No @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="Bottle_No" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="4" var_label="Bottle_No"/>
+</IsoSurfaceVariables>
+<CurrentSelection stationID="2" sampleID="0"/>
+</View>

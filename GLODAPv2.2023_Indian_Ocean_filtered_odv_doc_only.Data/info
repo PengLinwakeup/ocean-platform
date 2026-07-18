@@ -1,0 +1,107 @@
+	-----File Import Start
+	
+	>>Collection:	C:/Users/Windows/Desktop/ocean-platform/GLODAPv2.2023_Indian_Ocean_filtered_odv_doc_only
+	
+	Variables:
+		1: Depth [m]	
+		2: region	
+		3: cast	
+		4: maxsampdepth	
+		5: Bottle_No	
+		6: Pressure [dbar]	
+		7: Temperature [掳C]	
+		8: Theta [掳C]	
+		9: Salinity [PSS-78]	
+		10: Salinity_Flag	
+		11: Salinity_QC	
+		12: sigma0	
+		13: sigma1	
+		14: sigma2	
+		15: sigma3	
+		16: sigma4	
+		17: gamma	
+		18: Oxygen [碌mol/kg]	
+		19: Oxygen_Flag	
+		20: Oxygen_QC	
+		21: AOU [碌mol/kg]	
+		22: AOU_Flag	
+		23: Nitrate [碌mol/kg]	
+		24: Nitrate_Flag	
+		25: Nitrate_QC	
+		26: Nitrite [碌mol/kg]	
+		27: Nitrite_Flag	
+		28: Silicate [碌mol/kg]	
+		29: Silicate_Flag	
+		30: Silicate_QC	
+		31: Phosphate [碌mol/kg]	
+		32: Phosphate_Flag	
+		33: Phosphate_QC	
+		34: TCO2 [碌mol/kg]	
+		35: TCO2_Flag	
+		36: TCO2_QC	
+		37: Total Alkalinity [碌mol/kg]	
+		38: Total_Flag	
+		39: Total_QC	
+		40: fco2	
+		41: fco2_Flag	
+		42: fco2temp	
+		43: pHts25C [pH]	
+		44: pHts25C_Flag	
+		45: pHtsInSitu [pH]	
+		46: pHtsInSitu_Flag	
+		47: phts_QC	
+		48: cfc11	
+		49: pcfc11	
+		50: cfc11_Flag	
+		51: cfc11_QC	
+		52: cfc12	
+		53: pcfc12	
+		54: cfc12_Flag	
+		55: cfc12_QC	
+		56: cfc113	
+		57: pcfc113	
+		58: cfc113_Flag	
+		59: cfc113_QC	
+		60: ccl4	
+		61: pccl4	
+		62: ccl4_Flag	
+		63: ccl4_QC	
+		64: sf6	
+		65: psf6	
+		66: sf6_Flag	
+		67: sf6_QC	
+		68: c13	
+		69: c13_Flag	
+		70: c13_QC	
+		71: c14	
+		72: c14_Flag	
+		73: h3	
+		74: h3_Flag	
+		75: he3	
+		76: he3_Flag	
+		77: he	
+		78: he_Flag	
+		79: neon	
+		80: neon_Flag	
+		81: o18	
+		82: o18_Flag	
+		83: TOC [碌mol/kg]	
+		84: TOC_Flag	
+		85: DOC [umol/L]	
+		86: DOC_Flag	
+		87: DON [碌mol/kg]	
+		88: DON_Flag	
+		89: TDN [碌mol/kg]	
+		90: TDN_Flag	
+		91: Chl-a [碌g/L]	
+		92: Chl-a_Flag	
+		93: doi	
+	
+	ADD file: C:/Users/Windows/Desktop/ocean-platform/GLODAPv2.2023_Indian_Ocean_filtered_odv_doc_only.csv
+	5 station(s) processed successfully; 0 station(s) failed.
+	
+	
+	-----File Import End
+	
+	
+	IMPORT FILE SUMMARY: Total=1	Used=1	Errors=0	Warnings=0

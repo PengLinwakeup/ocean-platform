@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<View xview="0.23" collection="GLODAPv2.2023_Indian_Ocean_filtered_odv_doc_only">
+<GeographicMap>
+<MapDomain lon_min="105.38460" lat_min="-35.67078" lon_max="125.62665" lat_max="-19.59853"/>
+</GeographicMap>
+<MapWindow background_color="15">
+<Symbol small_size="0.333333" size="-0.1" color="1" type="0"/>
+<Window>
+<Geometry y_top="-19.5985252" y_offset_bb="1.25" x_projection="100" x_length_bb="13.5" x_offset_bb="8" x_right="125.626649" y_bottom="-35.6707787" y_length_bb="6.5" x_left="105.384603" y_projection="100"/>
+</Window>
+</MapWindow>
+<Section coordinate="2" width="0.012076" bathymetry_name="GEBCO_2023_6x6min_Global.nc">
+<xNodes>110.850419,111.98527,112.795878,114.440255,114.8803</xNodes>
+<yNodes>-22.4480701,-24.6826053,-24.8056073,-32.6572311,-32.7392324</yNodes>
+</Section>
+<DataWindow background_color="15">
+<AxisVariables>
+<xAxis var_list="1" keyvar_id="-2147483646" is_reversed="F" var_id="200000" var_label="Section Latitude"/>
+<yAxis var_list="1" keyvar_id="1" is_reversed="T" var_id="0" var_label="Depth [m]"/>
+<zAxis var_list="1" keyvar_id="-2147483646" is_reversed="F" var_id="84" var_label="DOC [umol/L]"/>
+</AxisVariables>
+<Modes plot_mode="2" window_mode="2" window_type="0"/>
+<Gridding y_scale_length="2.89821" auto_scale_lengths="T" draw_shaded="T" x_scale_length="5.59134"/>
+<BadEstimateHiding hide="T" max_distance="3"/>
+<DataMark size="0.2" color="17"/>
+<Window>
+<Geometry y_top="0" y_offset_bb="9.5" x_length_bb="23" x_offset_bb="3.5" x_right="-22.4480701" y_bottom="1000" y_length_bb="9.6" x_left="-32.7392324"/>
+<ColorScale z_range_start="40" z_range_end="70"/>
+<GraphicsObjects>
+<GObject dragging="F" post_data="T" is_automatic="T" clipping="F" own_coordinates="F" type="1">
+<Annotation font_size="14.6013" text_alignment="4" angle="0" frame_color="-1" text_color="0" y_coordinate="19.465126" text="DOC [umol/L]" frame_type="0" x_coordinate="26.5" background_color="-1" frame_width="-1"/>
+</GObject>
+<GObject dragging="F" post_data="T" is_automatic="T" clipping="F" own_coordinates="F" type="1">
+<Annotation font_size="13.4782" text_alignment="2" angle="90" frame_color="-1" text_color="0" y_coordinate="14.3" text="Depth [m]" frame_type="0" x_coordinate="2.33758719" background_color="-1" frame_width="-1"/>
+</GObject>
+</GraphicsObjects>
+</Window>
+</DataWindow>
+<BasicVariables>
+<Variable var_name="Depth" keyvar_id="1" max_value="1000.000" min_value="0.000" var_id="0" var_label="Depth [m]"/>
+<Variable var_name="region" keyvar_id="-2147483646" max_value="17.000" min_value="15.000" var_id="1" var_label="region"/>
+<Variable var_name="DOC" keyvar_id="-2147483646" max_value="70.000" min_value="40.000" var_id="84" var_label="DOC [umol/L]"/>
+</BasicVariables>
+<IsoSurfaceVariables>
+<!--region @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="region" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="1" var_label="region"/>
+<!--cast @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="cast" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="2" var_label="cast"/>
+<!--maxsampdepth @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="maxsampdepth" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="3" var_label="maxsampdepth"/>
+<!--Bottle_No @ Depth [m]=first-->
+<IsoVariable surface_value="first" var_name="Bottle_No" keyvar_id="-2147483646" surface_keyvar_id="1" surface_var_id="0" surface_var_label="Depth [m]" surface_var_name="Depth" var_id="4" var_label="Bottle_No"/>
+</IsoSurfaceVariables>
+<CurrentSelection stationID="2" sampleID="0"/>
+</View>
