@@ -34,6 +34,7 @@ interface SectionAnnotation {
   depth: number;
   color: string;
   fontSize: number;
+  flowDirection?: 'none' | 'into' | 'out';
 }
 
 interface TSPublicationStudioProps {
@@ -188,7 +189,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
     }
   }, [tsPubDepthFilter, tsPubPreset, tsData]);
   
-  const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity' | 'delta_tracer'>('temperature');
+  const [tsSectionParam, setTsSectionParam] = useState<'temperature' | 'salinity' | 'delta_tracer' | 'water_mass'>('temperature');
   const [tsSectionAxis, setTsSectionAxis] = useState<'longitude' | 'latitude' | 'distance'>('longitude');
   const [tsSectionHorizStretch, setTsSectionHorizStretch] = useState<string>('0.08');
   const [tsSectionMaskThreshold, setTsSectionMaskThreshold] = useState<string>('0.25');
@@ -473,9 +474,10 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
 
     const xKey = tsSectionAxis === 'distance' ? 'distance' : (tsSectionAxis === 'longitude' ? 'longitude' : 'latitude');
     const valKey = tsSectionParam;
+    const isWaterMass = tsSectionParam === 'water_mass';
 
     const xs = sectionData.map(d => d[xKey]);
-    const vals = sectionData.map(d => d[valKey]);
+    const vals = isWaterMass ? [0, 1] : sectionData.map(d => (d as any)[valKey] as number);
 
     const xMin = Math.min(...xs);
     const xMax = Math.max(...xs);
@@ -488,6 +490,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
     const power = 2;
 
     const gridData = new Float32Array(gridCols * gridRows);
+    const gridTemp = isWaterMass ? new Float32Array(gridCols * gridRows) : null;
+    const gridSal = isWaterMass ? new Float32Array(gridCols * gridRows) : null;
     const cellMask = new Uint8Array(gridCols * gridRows); // 0 = normal, 1 = seabed, 2 = distance masked
 
     // Extract unique stations and bottom depths along the chosen X axis coordinate
@@ -526,11 +530,14 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         const bottomDepth = getBottomDepthAtX(gx);
         if (gy > bottomDepth) {
           gridData[row * gridCols + col] = valMin;
+          if (gridTemp) gridTemp[row * gridCols + col] = 0;
+          if (gridSal) gridSal[row * gridCols + col] = 35.0;
           cellMask[row * gridCols + col] = 1; // Seabed
           continue;
         }
 
         let wSum = 0, vSum = 0, exact = false, exactV = 0;
+        let tSum = 0, sSum = 0, exactT = 0, exactS = 0;
         let minDistSq = Infinity;
         
         for (let i = 0; i < sectionData.length; i++) {
@@ -543,13 +550,29 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
             minDistSq = dist2;
           }
           
-          if (dist2 < 1e-12) { exact = true; exactV = sectionData[i][valKey]; break; }
+          if (dist2 < 1e-12) {
+            exact = true;
+            exactV = isWaterMass ? 0 : ((sectionData[i] as any)[valKey] as number);
+            exactT = sectionData[i].temperature;
+            exactS = sectionData[i].salinity;
+            break;
+          }
           const w = 1 / Math.pow(dist2, power / 2);
-          wSum += w; vSum += w * sectionData[i][valKey];
+          wSum += w;
+          if (!isWaterMass) {
+            vSum += w * ((sectionData[i] as any)[valKey] as number);
+          }
+          tSum += w * sectionData[i].temperature;
+          sSum += w * sectionData[i].salinity;
         }
 
-        const interpVal = exact ? exactV : (wSum > 0 ? vSum / wSum : valMin);
-        gridData[row * gridCols + col] = interpVal;
+        if (isWaterMass && gridTemp && gridSal) {
+          gridTemp[row * gridCols + col] = exact ? exactT : (wSum > 0 ? tSum / wSum : 0);
+          gridSal[row * gridCols + col] = exact ? exactS : (wSum > 0 ? sSum / wSum : 35.0);
+        } else {
+          const interpVal = exact ? exactV : (wSum > 0 ? vSum / wSum : valMin);
+          gridData[row * gridCols + col] = interpVal;
+        }
 
         if (minDistSq > (parseFloat(tsSectionMaskThreshold) || 0.25)) {
           cellMask[row * gridCols + col] = 2; // Distance masked
@@ -595,7 +618,9 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       return current;
     };
 
-    const smoothedGridData = smoothGrid(gridData, gridCols, gridRows, 2);
+    const smoothedGridData = isWaterMass ? new Float32Array(0) : smoothGrid(gridData, gridCols, gridRows, 2);
+    const smoothedTemp = isWaterMass && gridTemp ? smoothGrid(gridTemp, gridCols, gridRows, 2) : null;
+    const smoothedSal = isWaterMass && gridSal ? smoothGrid(gridSal, gridCols, gridRows, 2) : null;
 
     return {
       xKey,
@@ -608,6 +633,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
       gridCols,
       gridRows,
       gridData,
+      gridTemp: smoothedTemp,
+      gridSal: smoothedSal,
       cellMask,
       stationDepths,
       smoothedGridData
@@ -1203,6 +1230,8 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           gridCols,
           gridRows,
           gridData,
+          gridTemp,
+          gridSal,
           cellMask,
           stationDepths,
           smoothedGridData
@@ -1214,6 +1243,26 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           }
           const t = (v - valMin) / valRange;
           return getColormapColor(t);
+        };
+
+        const getWaterMassColorAt = (s: number, t: number): [number, number, number] => {
+          const ptDensity = getPointDensity({ salinity: s, temperature: t }, densityMetric);
+          const matchedWm = tsPubWaterMasses.find(wm => {
+            if (wm.isDensityInterval) {
+              return (wm.densityMin === undefined || ptDensity >= wm.densityMin) &&
+                     (wm.densityMax === undefined || ptDensity < wm.densityMax);
+            } else {
+              return t >= wm.tMin && t <= wm.tMax && s >= wm.sMin && s <= wm.sMax;
+            }
+          });
+          if (matchedWm && matchedWm.color) {
+            const cleanHex = matchedWm.color.replace('#', '');
+            const r = parseInt(cleanHex.substring(0, 2), 16);
+            const g = parseInt(cleanHex.substring(2, 4), 16);
+            const b = parseInt(cleanHex.substring(4, 6), 16);
+            return [isNaN(r) ? 255 : r, isNaN(g) ? 255 : g, isNaN(b) ? 255 : b];
+          }
+          return [241, 245, 249]; // default light neutral gray for unclassified
         };
 
         const cellW = plotW / gridCols;
@@ -1233,15 +1282,23 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
             } else if (mask === 2) {
               ctx.fillStyle = '#ffffff';
             } else {
-              const interpVal = gridData[row * gridCols + col];
-              const [r, g, b] = getValColor(interpVal);
-              ctx.fillStyle = `rgb(${r},${g},${b})`;
+              if (tsSectionParam === 'water_mass' && gridTemp && gridSal) {
+                const s = gridSal[row * gridCols + col];
+                const t = gridTemp[row * gridCols + col];
+                const [r, g, b] = getWaterMassColorAt(s, t);
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+              } else {
+                const interpVal = gridData[row * gridCols + col];
+                const [r, g, b] = getValColor(interpVal);
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+              }
             }
             ctx.fillRect(plotX + col * cellW, plotY + row * cellH, cellW + 0.5, cellH + 0.5);
           }
         }
 
         // 3. Draw Contour lines using d3-contour
+        if (tsSectionParam !== 'water_mass') {
         let contourStep = 0.5;
         if (tsSectionParam === 'temperature' || tsSectionParam === 'salinity') {
           const rawStep = valRange / 12; // target around 12 major bands
@@ -1338,6 +1395,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           ctx.restore();
         } catch (err) {
           console.error('Contour rendering failed:', err);
+        }
         }
 
         // 4. Overpaint masked areas (seabed and distance voids) to cover contour lines
@@ -1443,13 +1501,57 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
 
           ctx.save();
           ctx.fillStyle = ann.color || '#000000';
-          ctx.font = `italic bold ${ann.fontSize * dpr}px ${fontFamily}`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 2.5 * dpr;
-          ctx.strokeText(ann.text, px, py);
-          ctx.fillText(ann.text, px, py);
+
+          if (ann.flowDirection === 'into' || ann.flowDirection === 'out') {
+            const r = (ann.fontSize || 11) * 0.8 * dpr;
+            
+            // Draw circle outline
+            ctx.beginPath();
+            ctx.arc(px, py, r, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fill();
+
+            // Draw center detail
+            ctx.fillStyle = '#ffffff'; // contrasting inside
+            ctx.strokeStyle = ann.color || '#000000';
+            ctx.lineWidth = 1.5 * dpr;
+            if (ann.flowDirection === 'into') {
+              // Draw X
+              const dist = r * Math.SQRT1_2;
+              ctx.beginPath();
+              ctx.moveTo(px - dist, py - dist);
+              ctx.lineTo(px + dist, py + dist);
+              ctx.moveTo(px + dist, py - dist);
+              ctx.lineTo(px - dist, py + dist);
+              ctx.stroke();
+            } else {
+              // Draw dot
+              ctx.beginPath();
+              ctx.arc(px, py, r * 0.25, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            // Draw text next to it
+            if (ann.text) {
+              ctx.fillStyle = '#000000';
+              ctx.font = `bold ${ann.fontSize * dpr}px ${fontFamily}`;
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'middle';
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 2.5 * dpr;
+              ctx.strokeText(ann.text, px + r + 5 * dpr, py);
+              ctx.fillText(ann.text, px + r + 5 * dpr, py);
+            }
+          } else {
+            // Normal text
+            ctx.font = `italic bold ${ann.fontSize * dpr}px ${fontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.strokeText(ann.text, px, py);
+            ctx.fillText(ann.text, px, py);
+          }
           ctx.restore();
         });
 
@@ -1665,54 +1767,89 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         const cbX = plotX + plotW + 15 * dpr;
         const cbY = plotY;
 
-        for (let i = 0; i < cbH; i++) {
-          const pct = 1 - i / (cbH - 1);
-          let r = 0, g = 0, b = 0;
-          if (tsSectionParam === 'delta_tracer') {
-            const val = valMin + pct * valRange;
-            [r, g, b] = getDivergentColor(val, valMin, valMax);
-          } else {
-            [r, g, b] = getColormapColor(pct);
+        if (tsSectionParam === 'water_mass') {
+          // Draw categorical legend for water masses
+          ctx.save();
+          const legendX = cbX;
+          let legendY = cbY + 10 * dpr;
+          const boxSize = 10 * dpr;
+          
+          const activeWaterMasses = tsPubWaterMasses.filter(wm => {
+            if (tsPubDepthFilter === 'all') return true;
+            if (wm.depthLayer) return wm.depthLayer === tsPubDepthFilter;
+            return true;
+          });
+
+          ctx.font = `bold ${9.5 * dpr}px ${fontFamily}`;
+          ctx.fillStyle = '#000000';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('Water Mass', legendX, cbY - 12 * dpr);
+
+          activeWaterMasses.forEach(wm => {
+            ctx.fillStyle = wm.color || '#94a3b8';
+            ctx.fillRect(legendX, legendY, boxSize, boxSize);
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 0.5 * dpr;
+            ctx.strokeRect(legendX, legendY, boxSize, boxSize);
+
+            ctx.fillStyle = '#334155';
+            ctx.font = `600 ${8.5 * dpr}px ${fontFamily}`;
+            ctx.fillText(wm.name, legendX + boxSize + 6 * dpr, legendY + boxSize / 2);
+            
+            legendY += 16 * dpr;
+          });
+          ctx.restore();
+        } else {
+          for (let i = 0; i < cbH; i++) {
+            const pct = 1 - i / (cbH - 1);
+            let r = 0, g = 0, b = 0;
+            if (tsSectionParam === 'delta_tracer') {
+              const val = valMin + pct * valRange;
+              [r, g, b] = getDivergentColor(val, valMin, valMax);
+            } else {
+              [r, g, b] = getColormapColor(pct);
+            }
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(cbX, cbY + i, cbW, 1);
           }
-          ctx.fillStyle = `rgb(${r},${g},${b})`;
-          ctx.fillRect(cbX, cbY + i, cbW, 1);
+
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 0.8 * dpr;
+          ctx.strokeRect(cbX, cbY, cbW, cbH);
+
+          ctx.fillStyle = '#000000';
+          ctx.font = `${9 * dpr}px ${fontFamily}`;
+          ctx.textAlign = 'left';
+          const cbTicks = 5;
+          for (let i = 0; i <= cbTicks; i++) {
+            const val = valMin + (i / cbTicks) * valRange;
+            const py = cbY + cbH - (i / cbTicks) * cbH;
+
+            ctx.beginPath();
+            ctx.moveTo(cbX + cbW, py);
+            ctx.lineTo(cbX + cbW + 3 * dpr, py);
+            ctx.stroke();
+
+            ctx.fillText(val.toFixed(2), cbX + cbW + 6 * dpr, py + 3 * dpr);
+          }
+
+          ctx.save();
+          ctx.translate(cbX + cbW + 42 * dpr, cbY + cbH / 2);
+          ctx.rotate(-Math.PI / 2);
+          ctx.font = `bold ${9.5 * dpr}px ${fontFamily}`;
+          ctx.textAlign = 'center';
+          ctx.fillText(
+            tsSectionParam === 'temperature'
+              ? 'Temperature (°C)'
+              : tsSectionParam === 'salinity'
+                ? 'Salinity (psu)'
+                : `Δ${selectedOmpTracer} (anomaly)`,
+            0,
+            0
+          );
+          ctx.restore();
         }
-
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 0.8 * dpr;
-        ctx.strokeRect(cbX, cbY, cbW, cbH);
-
-        ctx.fillStyle = '#000000';
-        ctx.font = `${9 * dpr}px ${fontFamily}`;
-        ctx.textAlign = 'left';
-        const cbTicks = 5;
-        for (let i = 0; i <= cbTicks; i++) {
-          const val = valMin + (i / cbTicks) * valRange;
-          const py = cbY + cbH - (i / cbTicks) * cbH;
-
-          ctx.beginPath();
-          ctx.moveTo(cbX + cbW, py);
-          ctx.lineTo(cbX + cbW + 3 * dpr, py);
-          ctx.stroke();
-
-          ctx.fillText(val.toFixed(2), cbX + cbW + 6 * dpr, py + 3 * dpr);
-        }
-
-        ctx.save();
-        ctx.translate(cbX + cbW + 42 * dpr, cbY + cbH / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.font = `bold ${9.5 * dpr}px ${fontFamily}`;
-        ctx.textAlign = 'center';
-        ctx.fillText(
-          tsSectionParam === 'temperature'
-            ? 'Temperature (°C)'
-            : tsSectionParam === 'salinity'
-              ? 'Salinity (psu)'
-              : `Δ${selectedOmpTracer} (anomaly)`,
-          0,
-          0
-        );
-        ctx.restore();
       }
     }
   };
@@ -1919,9 +2056,11 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
         { name: 'AAIW', s: 34.2, t: 4.5, tracerVal: 48 }
       ]);
       setTsPubAnnotations([
-        { id: '1', text: 'South Indian Central Water', x: 12.0, depth: 150, color: '#000000', fontSize: 11 },
-        { id: '2', text: 'Antarctic Intermediate Water', x: 15.0, depth: 700, color: '#000000', fontSize: 11 },
-        { id: '3', text: 'Red Sea-Persian Gulf Int. Water', x: 18.0, depth: 800, color: '#ec4899', fontSize: 11 }
+        { id: '1', text: 'South Indian Central Water', x: 75.0, depth: 150, color: '#000000', fontSize: 11, flowDirection: 'none' },
+        { id: '2', text: 'Antarctic Intermediate Water', x: 80.0, depth: 700, color: '#000000', fontSize: 11, flowDirection: 'none' },
+        { id: '3', text: 'Red Sea-Persian Gulf Int. Water', x: 65.0, depth: 800, color: '#ec4899', fontSize: 11, flowDirection: 'none' },
+        { id: '4', text: 'DWBC Inflow (朝着纸面)', x: 45.0, depth: 3500, color: '#1d4ed8', fontSize: 11, flowDirection: 'into' },
+        { id: '5', text: 'Eastern Return Flow (背对纸面)', x: 105.0, depth: 3200, color: '#ef4444', fontSize: 11, flowDirection: 'out' }
       ]);
     } else if (presetName === 'pacific') {
       setTsPubSalMin('32.0');
@@ -2124,6 +2263,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   const [newAnnText, setNewAnnText] = useState('');
   const [newAnnX, setNewAnnX] = useState('-60.0');
   const [newAnnDepth, setNewAnnDepth] = useState('200');
+  const [newAnnFlow, setNewAnnFlow] = useState<'none' | 'into' | 'out'>('none');
 
   const addWaterMass = () => {
     if (!newWmName) return;
@@ -2142,17 +2282,19 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
   };
 
   const addAnnotation = () => {
-    if (!newAnnText) return;
-    const newAnn = {
+    if (!newAnnText && newAnnFlow === 'none') return;
+    const newAnn: SectionAnnotation = {
       id: Math.random().toString(),
       text: newAnnText,
-      x: parseFloat(newAnnX) || -60.0,
+      x: parseFloat(newAnnX) || 60.0,
       depth: parseFloat(newAnnDepth) || 200,
       color: '#000000',
-      fontSize: 11
+      fontSize: 11,
+      flowDirection: newAnnFlow
     };
     setTsPubAnnotations([...tsPubAnnotations, newAnn]);
     setNewAnnText('');
+    setNewAnnFlow('none');
   };
 
   return (
@@ -2361,6 +2503,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
               >
                 <option value="temperature">温度 (°C)</option>
                 <option value="salinity">盐度 (psu)</option>
+                <option value="water_mass">水团划分 (Water Mass)</option>
                 {enableOmp && (
                   <option value="delta_tracer">生化残差 Δ{selectedOmpTracer}</option>
                 )}
@@ -2513,7 +2656,7 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', background: '#f8fafc', padding: '8px', borderRadius: '6px' }}>
             <input
-              type="text" placeholder="标签内容 (如 Winter water)" value={newAnnText} onChange={e => setNewAnnText(e.target.value)}
+              type="text" placeholder="标签内容 (如 DWBC Inflow)" value={newAnnText} onChange={e => setNewAnnText(e.target.value)}
               style={{ padding: '3px 6px', fontSize: '10px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
             />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
@@ -2525,6 +2668,17 @@ export default function TSPublicationStudio({ hydroSamples, tsData }: TSPublicat
                 type="number" step="10" placeholder="深度 (m)" value={newAnnDepth} onChange={e => setNewAnnDepth(e.target.value)}
                 style={{ padding: '3px 6px', fontSize: '10px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
               />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '10px', color: '#64748b' }}>流向矢量符号</label>
+              <select
+                value={newAnnFlow} onChange={e => setNewAnnFlow(e.target.value as any)}
+                style={{ padding: '4px 6px', fontSize: '10px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
+              >
+                <option value="none">无流向符号 (仅文字)</option>
+                <option value="into">朝着纸面流进去 (⊗ - Inflow / Northward)</option>
+                <option value="out">背着纸面流出来 (⊙ - Outflow / Southward)</option>
+              </select>
             </div>
             <button
               onClick={addAnnotation}
