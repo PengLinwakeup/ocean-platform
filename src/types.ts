@@ -5,6 +5,7 @@ export interface RawInjection {
   injNo: number;
   type: string;
   area: number;
+  globalIndex?: number;
 }
 
 export interface SampleGroup {
@@ -32,6 +33,10 @@ export interface SampleGroup {
   cruise?: string;
   time?: string;
   type?: string;
+  // Optional UI & Calculation flags
+  isRejected?: boolean;
+  calculatedConc?: number;
+  qcFlag?: number;
 }
 
 export interface ExcelSampleInfo {

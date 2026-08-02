@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Upload, FileText, Download, Trash2, CheckCircle, AlertTriangle,
-  Settings, ChevronLeft, ChevronRight, Check, Printer
+  Settings, ChevronLeft, ChevronRight, Check, Printer, FileSpreadsheet
 } from 'lucide-react';
 import { parseRawTxt } from './utils/parser';
-import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev, calculateAOU } from './utils/calc';
+import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev } from './utils/calc';
 import { parseStationCoordinates, normalizeStationName, parseHydrologicalExcel } from './utils/stationParser';
 import { RawInjection, SampleGroup, ExcelSampleInfo, HydrologicalSample } from './types';
 import {
@@ -13,6 +13,9 @@ import {
 } from 'recharts';
 import * as xlsx from 'xlsx';
 import OriginPlotter from './components/OriginPlotter';
+import QCDashboard from './components/QCDashboard';
+import { exportMultiSheetQCExcel, exportODVPlottingCSV, ColumnBatchExportData } from './utils/excelExporter';
+import { evaluateSampleQC, correctCrmIdentity } from './utils/qcEvaluator';
 
 const loadSavedState = <T,>(key: string, defaultValue: T): T => {
   try {
@@ -195,12 +198,39 @@ export default function App() {
     }
   };
 
+  // Helper to extract physical date timestamp/priority for sorting files chromatically
+  const getFileSortPriority = (fileName: string): number => {
+    const fn = fileName.toLowerCase();
+    // Highest priority (earliest): indian ocean-51, 50, etc.
+    if (fn.includes('indian ocean-51') || fn.includes('indian ocean 51')) return 10051;
+    if (fn.includes('indian ocean-50') || fn.includes('indian ocean 50')) return 10050;
+    if (fn.includes('indian ocean')) return 10099;
+
+    // Regular date pattern matching (e.g., 6.10, 6.14, 6.18, 6.21, 6.25, 6.29, 7.3, 11-7.3)
+    const dateMatch = fn.match(/(\d{1,2})\.(\d{1,2})/);
+    if (dateMatch) {
+      const month = parseInt(dateMatch[1], 10);
+      const day = parseInt(dateMatch[2], 10);
+      
+      // Batch index prefix (e.g. 1-6.21 -> 1, 9-6.29 -> 9)
+      const batchMatch = fn.match(/^(\d+)-/);
+      const batchNo = batchMatch ? parseInt(batchMatch[1], 10) : 0;
+      
+      return 200000 + month * 10000 + day * 100 + batchNo;
+    }
+
+    return 900000;
+  };
+
   const processRawFiles = async (fileList: File[]) => {
+    // Sort incoming files by physical measurement date & batch priority
+    const sortedFileList = [...fileList].sort((a, b) => getFileSortPriority(a.name) - getFileSortPriority(b.name));
+
     const newFiles: { name: string; size: number }[] = [];
     let accumulatedInjections: RawInjection[] = [...rawInjections];
     let detectedConc: number | null = null;
 
-    for (const file of fileList) {
+    for (const file of sortedFileList) {
       if (files.some(f => f.name === file.name)) continue;
       newFiles.push({ name: file.name, size: file.size });
 
@@ -455,6 +485,7 @@ export default function App() {
       sampleId: string;
       fileName: string;
       injections: number[];
+      rawInjIndices: number[];
     }[] = [];
 
     let currentGroup: {
@@ -462,10 +493,11 @@ export default function App() {
       sampleId: string;
       fileName: string;
       injections: number[];
+      rawInjIndices: number[];
     } | null = null;
 
     // Group injections by splitting when we encounter injNo === 1
-    for (const inj of rawInjections) {
+    rawInjections.forEach((inj, globalIdx) => {
       if (inj.injNo === 1) {
         if (currentGroup) {
           groups.push(currentGroup);
@@ -474,14 +506,16 @@ export default function App() {
           sampleName: inj.sampleName,
           sampleId: inj.sampleId,
           fileName: inj.fileName,
-          injections: [inj.area]
+          injections: [inj.area],
+          rawInjIndices: [globalIdx]
         };
       } else {
         if (currentGroup) {
           currentGroup.injections.push(inj.area);
+          currentGroup.rawInjIndices.push(globalIdx);
         }
       }
-    }
+    });
     if (currentGroup) {
       groups.push(currentGroup);
     }
@@ -492,7 +526,12 @@ export default function App() {
       const displayName = customSampleNames[id] !== undefined ? customSampleNames[id] : g.sampleName;
 
       const isStd = displayName.toLowerCase().includes('std');
-      const isBlank = displayName.toLowerCase().includes('blank') || displayName.toLowerCase().includes('mq');
+      const isBlank = (
+        displayName.toLowerCase().includes('blank') ||
+        displayName.toLowerCase().includes('mq') ||
+        g.sampleId.toLowerCase().includes('blank') ||
+        g.sampleId.toLowerCase().includes('mq')
+      );
       const isSeawater = displayName.toLowerCase() === 'dsw' || displayName.toLowerCase() === 'ssw' || displayName.toLowerCase().startsWith('sw');
 
       // Try matching via Excel sample info (Label ID matching sampleName)
@@ -571,13 +610,27 @@ export default function App() {
         finalMean = calculateMean(activeVals);
         finalSd = calculateStdev(activeVals);
         finalRsd = finalMean > 0 ? (finalSd / finalMean) * 100 : 0;
+      } else if (isBlank || g.injections.every(a => a < 1.0)) {
+        // For MQ Blank or low-signal samples, 0-area peak values are valid blank readings. Run selectBestSubset across all injections
+        const subsetResult = selectBestSubset(g.injections);
+        finalSelected = subsetResult.selected;
+        finalMean = subsetResult.avArea;
+        finalSd = subsetResult.sdArea;
+        finalRsd = subsetResult.rsd;
       } else {
         // Automatic empty injection exclusion (data cleaning) + 3-out-of-4 outlier exclusion
         const isEmpty = g.injections.map(area => area < emptyInjectionThreshold);
         const nonEmptyIndices = g.injections.map((_, i) => i).filter(i => !isEmpty[i]);
         const nonEmptyVals = nonEmptyIndices.map(i => g.injections[i]);
 
-        if (nonEmptyVals.length === 0) {
+        if (nonEmptyVals.length <= 1 && g.injections.length >= 2) {
+          // Fallback to selectBestSubset on all injections if empty threshold excluded too many
+          const result = selectBestSubset(g.injections);
+          finalSelected = result.selected;
+          finalMean = result.avArea;
+          finalSd = result.sdArea;
+          finalRsd = result.rsd;
+        } else if (nonEmptyVals.length === 0) {
           // Fallback if all are empty
           const result = selectBestSubset(g.injections);
           finalSelected = result.selected;
@@ -604,12 +657,22 @@ export default function App() {
         }
       }
 
+      // Final safeguard: Never allow a sample with >= 2 injections to have fewer than 2 selected injections for averaging
+      if (finalSelected.filter(Boolean).length < 2 && g.injections.length >= 2) {
+        const subsetResult = selectBestSubset(g.injections);
+        finalSelected = subsetResult.selected;
+        finalMean = subsetResult.avArea;
+        finalSd = subsetResult.sdArea;
+        finalRsd = subsetResult.rsd;
+      }
+
       return {
         id,
         fileName: g.fileName,
         sampleName: displayName,
         sampleId: g.sampleId,
         injections: g.injections,
+        rawInjIndices: g.rawInjIndices,
         selectedInjections: finalSelected,
         avArea: finalMean,
         sdArea: finalSd,
@@ -623,13 +686,74 @@ export default function App() {
     });
   }, [rawInjections, excludedInjections, emptyInjectionThreshold, stationCoords, customSampleNames, hydroSamples]);
 
-  // Calculate average area of MQ Blanks (specifically sampleId === 'Blank', excluding 'Cleaning')
+  // Calculate average area of MQ Blanks, excluding cleaning/flush bottles and high residual carryover outliers
   const mqBlankAverageArea = useMemo(() => {
-    const blanks = sampleGroups.filter(g => g.isBlank && g.sampleId.toLowerCase() === 'blank');
-    if (blanks.length === 0) return 0;
-    const totalArea = blanks.reduce((sum, g) => sum + g.avArea, 0);
-    return totalArea / blanks.length;
+    // 1. Filter valid MQ blanks that are not explicitly marked as cleaning/flush/wash
+    const validBlanks = sampleGroups.filter(g => {
+      if (!g.isBlank) return false;
+      const lowerId = g.sampleId.toLowerCase();
+      const lowerName = g.sampleName.toLowerCase();
+      // Exclude explicit wash/flush/cleaning bottles
+      if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash')) {
+        return false;
+      }
+      return true;
+    });
+
+    if (validBlanks.length === 0) return 0;
+
+    // 2. Filter out extreme outliers (e.g. carryover wash points like 30.63 uM with area >> median)
+    const areas = validBlanks.map(g => g.avArea).sort((a, b) => a - b);
+    const median = areas.length % 2 === 0
+      ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
+      : areas[Math.floor(areas.length / 2)];
+
+    // Outlier threshold: area > 3.0 * median AND area > 0.3 (to prevent excluding tiny normal noise)
+    const filteredBlanks = validBlanks.filter(g => {
+      if (median > 0 && g.avArea > Math.max(median * 3.0, 0.3)) {
+        return false; // Exclude carryover outlier
+      }
+      return true;
+    });
+
+    const activeBlanks = filteredBlanks.length > 0 ? filteredBlanks : validBlanks;
+    const totalArea = activeBlanks.reduce((sum, g) => sum + g.avArea, 0);
+    return totalArea / activeBlanks.length;
   }, [sampleGroups]);
+
+  // Per-file/per-batch MQ Blank average area map for independent batch deduction
+  const fileMqBlankMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    const fileGroups: Record<string, any[]> = {};
+    sampleGroups.forEach(g => {
+      if (!fileGroups[g.fileName]) fileGroups[g.fileName] = [];
+      fileGroups[g.fileName].push(g);
+    });
+
+    Object.entries(fileGroups).forEach(([fileName, gList]) => {
+      const validBlanks = gList.filter(g => {
+        if (!g.isBlank) return false;
+        const lowerId = g.sampleId.toLowerCase();
+        const lowerName = g.sampleName.toLowerCase();
+        if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash')) return false;
+        return true;
+      });
+
+      if (validBlanks.length > 0) {
+        const areas = validBlanks.map(g => g.avArea).sort((a, b) => a - b);
+        const median = areas.length % 2 === 0
+          ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
+          : areas[Math.floor(areas.length / 2)];
+
+        const filteredBlanks = validBlanks.filter(g => !(median > 0 && g.avArea > Math.max(median * 3.0, 0.3)));
+        const activeBlanks = filteredBlanks.length > 0 ? filteredBlanks : validBlanks;
+        map[fileName] = activeBlanks.reduce((sum, b) => sum + b.avArea, 0) / activeBlanks.length;
+      } else {
+        map[fileName] = mqBlankAverageArea; // Fallback to global average if this file has no MQ
+      }
+    });
+    return map;
+  }, [sampleGroups, mqBlankAverageArea]);
 
   // Default station selection is now handled inside OriginPlotter component
 
@@ -679,6 +803,9 @@ export default function App() {
       const name = `工作曲线 ${index + 1} (${curveBlock.fileName.split('.')[0]})`;
       const activePoints: { x: number; y: number }[] = [];
 
+      // Per-batch independent MQ blank area
+      const batchBlankArea = fileMqBlankMap[curveBlock.fileName] ?? mqBlankAverageArea;
+
       const detailedStandards = curveBlock.standards.map((std, stdIndex) => {
         const customC = customStdUsedCs[std.id];
         let matchedUsedC = customC !== undefined ? customC : stdUsedC;
@@ -694,7 +821,7 @@ export default function App() {
         const theoreticalC = matchedUsedC / currentDilution;
         const isEnabled = enabledStds[std.id] !== undefined ? enabledStds[std.id] : (stdIndex < dilutionFactors.length);
 
-        const areaToFit = std.avArea - (enableBlankCorrection ? mqBlankAverageArea : 0);
+        const areaToFit = std.avArea - (enableBlankCorrection ? batchBlankArea : 0);
         if (isEnabled) {
           activePoints.push({ x: theoreticalC, y: areaToFit });
         }
@@ -726,7 +853,7 @@ export default function App() {
         rsq: fit.rsq
       };
     });
-  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs, enableBlankCorrection, mqBlankAverageArea, forceZeroIntercept]);
+  }, [sampleGroups, stdUsedC, dilutionFactors, customDilutions, enabledStds, customStdUsedCs, enableBlankCorrection, mqBlankAverageArea, fileMqBlankMap, forceZeroIntercept]);
 
   // Active/selected calibration curve
   const activeCurve = useMemo(() => {
@@ -787,7 +914,8 @@ export default function App() {
       const intercept = curve?.intercept || 0;
       const offset = curveOffsets[curveId] || 0;
 
-      const areaToUse = g.avArea - (enableBlankCorrection ? mqBlankAverageArea : 0);
+      const batchBlankArea = fileMqBlankMap[g.fileName] ?? mqBlankAverageArea;
+      const areaToUse = g.avArea - (enableBlankCorrection ? batchBlankArea : 0);
       const concentration = (areaToUse - intercept) / slope + offset;
       const error = g.sdArea / slope;
 
@@ -946,464 +1074,261 @@ export default function App() {
   // Note: dataBounds, uniqueStationCoords, and chart1dData memos moved to OriginPlotter component
 
   // Excel template export generator
-  const exportToExcel = () => {
-    const wb = xlsx.utils.book_new();
+  const exportToExcel = async () => {
+    const activeCurves = calibrationCurves
+      .filter(c => !disabledCurves[c.id])
+      .map(c => ({ id: c.id, name: c.name, fileName: c.fileName, slope: c.slope, intercept: c.intercept, rsq: c.rsq }));
 
-    // Helper to map headers to ODV format
-    const mapHeader = (h: string) => {
-      const trimmed = h.trim();
-      const lower = trimmed.toLowerCase();
-      let mapped = trimmed;
-      if (lower.includes('temp')) {
-        mapped = 'Temperature [ITS-90]';
-      } else if (lower.includes('salinity') || lower === 'sal') {
-        mapped = 'Salinity [PSS-78]';
-      } else if (lower.includes('oxygen titration')) {
-        mapped = 'Oxygen titration [µmol/kg]';
-      } else if (lower.includes('oxygen') || lower === 'o2' || lower === 'dox') {
-        mapped = 'Oxygen [µmol/kg]';
-      } else if (lower.includes('fluorescence') || lower === 'fluor') {
-        mapped = 'Fluorescence [µg/L]';
-      } else if (lower.includes('potential density')) {
-        mapped = 'Potential Density [kg/m^3]';
-      } else if (lower.includes('in-situ density')) {
-        mapped = 'In-situ Density [kg/m^3]';
-      } else if (lower.includes('turbidity')) {
-        mapped = 'Turbidity [NTU]';
-      } else if (lower.includes('alkalinity')) {
-        mapped = 'Total Alkalinity [µmol/kg]';
-      } else if (lower === 'ph') {
-        mapped = 'pH';
-      } else {
-        mapped = trimmed.replace(/\(([^)]+)\)$/, '[$1]');
+    const calculatedConcs = processedSamples.reduce((acc, s) => {
+      acc[s.id] = s.concentration;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const targetCrmConc = (dswMin + dswMax) / 2;
+
+    const fileMap: Record<string, SampleGroup[]> = {};
+    processedSamples.forEach(g => {
+      if (!fileMap[g.fileName]) {
+        fileMap[g.fileName] = [];
       }
-      return mapped;
+      fileMap[g.fileName].push(g);
+    });
+
+    const getFileSortPriority = (fileName: string): number => {
+      const activeFileNames = activeCurves.map(c => c.fileName);
+      const idx = activeFileNames.indexOf(fileName);
+      return idx >= 0 ? idx : 999;
     };
 
-    const findValueByKeywords = (values: Record<string, number>, keywords: string[]): number | undefined => {
-      const keys = Object.keys(values);
-      for (const keyword of keywords) {
-        const matchedKey = keys.find(k => {
-          const lowerK = k.toLowerCase();
-          if (lowerK.includes(keyword.toLowerCase())) return true;
-          const strippedK = lowerK.replace(/[^a-z0-9]/g, '');
-          const strippedKeyword = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
-          if (strippedKeyword && strippedK.includes(strippedKeyword)) return true;
-          return false;
+    const sortedFileEntries = Object.entries(fileMap).sort(([fileA], [fileB]) => getFileSortPriority(fileA) - getFileSortPriority(fileB));
+    const batchAnalysis: ColumnBatchExportData[] = [];
+
+    sortedFileEntries.forEach(([fileName, sampleList], fileIdx) => {
+      const fileColIdx = fileIdx + 1;
+      const matchingCurves = activeCurves.filter(c => c.fileName === fileName);
+
+      if (matchingCurves.length > 0) {
+        const isMultiCurveInFile = matchingCurves.length > 1;
+
+        matchingCurves.forEach(calib => {
+          const curveSamples = isMultiCurveInFile
+            ? sampleList.filter(s => (s as any).curveId === calib.id)
+            : sampleList;
+          const activeSampleList = curveSamples.length > 0 ? curveSamples : sampleList;
+
+          const validBlanks = activeSampleList.filter(s => {
+            if (!s.isBlank && !s.sampleName.toLowerCase().includes('blank') && !s.sampleName.toLowerCase().includes('mq')) return false;
+            const lowerId = s.sampleId.toLowerCase();
+            const lowerName = s.sampleName.toLowerCase();
+            if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash') || lowerName.includes('冲洗') || lowerName.includes('清洗')) return false;
+            return true;
+          });
+
+          let blankArea = 0;
+          let blankConcEquiv = 0;
+          if (validBlanks.length > 0) {
+            const areas = validBlanks.map(g => g.avArea).sort((a, b) => a - b);
+            const medianArea = areas.length % 2 === 0
+              ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
+              : areas[Math.floor(areas.length / 2)];
+
+            const filteredBlanks = validBlanks.filter(g => !(medianArea > 0 && g.avArea > Math.max(medianArea * 3.0, 0.3)));
+            const activeBlanks = filteredBlanks.length > 0 ? filteredBlanks : validBlanks;
+            blankArea = activeBlanks.reduce((sum, b) => sum + b.avArea, 0) / activeBlanks.length;
+            blankConcEquiv = calib.slope > 0 ? blankArea / calib.slope : 0;
+          }
+
+          let dswCrms = activeSampleList.filter(s => {
+            if ((s as any).isRejected) return false;
+            const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+            const corrected = correctCrmIdentity(s.sampleName, conc);
+            return corrected.actualType === 'DSW';
+          });
+
+          if (dswCrms.length <= 1) {
+            const fileDsws = sampleList.filter(s => {
+              if ((s as any).isRejected) return false;
+              const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+              const corrected = correctCrmIdentity(s.sampleName, conc);
+              return corrected.actualType === 'DSW';
+            });
+            if (fileDsws.length > dswCrms.length) {
+              dswCrms = fileDsws;
+            }
+          }
+
+          let crmAvgMeasured = 0;
+          let crmRecovery = 0;
+
+          if (dswCrms.length > 0) {
+            const crmConcs = dswCrms.map(c => calculatedConcs[c.id] ?? 0);
+            crmAvgMeasured = crmConcs.reduce((a, b) => a + b, 0) / dswCrms.length;
+            crmRecovery = targetCrmConc > 0 ? (crmAvgMeasured / targetCrmConc) * 100 : 0;
+          }
+
+          const evaluatedSamples = activeSampleList.map(s => {
+            const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+            const evalRes = evaluateSampleQC(s.rsd, crmRecovery > 0 ? crmRecovery : undefined, calib.rsq);
+            return {
+              ...s,
+              calculatedConc: conc,
+              qcFlag: evalRes.flag
+            };
+          });
+
+          batchAnalysis.push({
+            curveId: calib.id,
+            curveName: calib.name,
+            fileName,
+            fileColIdx,
+            slope: calib.slope,
+            intercept: calib.intercept,
+            rsq: calib.rsq,
+            blankArea,
+            blankConcEquiv,
+            crmExpected: targetCrmConc,
+            crmMeasuredAvg: crmAvgMeasured,
+            crmRecovery,
+            samples: evaluatedSamples
+          });
         });
-        if (matchedKey && values[matchedKey] !== undefined) {
-          return values[matchedKey];
-        }
       }
-      return undefined;
-    };
-
-    // Pre-group hydro samples by normalized station name to avoid O(N) filter on every call
-    const hydroByStation = new Map<string, HydrologicalSample[]>();
-    if (hydroSamples) {
-      hydroSamples.forEach(h => {
-        if (h.station) {
-          const norm = normalizeStationName(h.station);
-          let list = hydroByStation.get(norm);
-          if (!list) {
-            list = [];
-            hydroByStation.set(norm, list);
-          }
-          list.push(h);
-        }
-      });
-    }
-
-    // Helper to map station + depth to closest hydro profile sample
-    const findHydroDataForSample = (st: string | null, depth: number | null) => {
-      if (!st || depth === null || !hydroSamples || hydroSamples.length === 0) return null;
-      const normSt = normalizeStationName(st);
-      const stationHydro = hydroByStation.get(normSt);
-      if (!stationHydro || stationHydro.length === 0) return null;
-
-      let closest = stationHydro[0];
-      let minDiff = Math.abs(closest.depth - depth);
-      for (const h of stationHydro) {
-        const diff = Math.abs(h.depth - depth);
-        if (diff < minDiff) {
-          minDiff = diff;
-          closest = h;
-        }
-      }
-      return closest;
-    };
-
-    // 1. Final Data Sheet
-    const finalDataRows: any[][] = [
-      ["DOC 分析报告"],
-      ["生成时间", new Date().toLocaleString()],
-      [],
-      ["检测到的工作曲线列表"],
-      ["工作曲线名称", "所属文件", "斜率 (Slope)", "截距 (Intercept)", "判定系数 (R²)"]
-    ];
-
-    calibrationCurves.forEach(c => {
-      finalDataRows.push([
-        c.name,
-        c.fileName,
-        parseFloat(c.slope.toFixed(6)),
-        parseFloat(c.intercept.toFixed(6)),
-        parseFloat(c.rsq.toFixed(6))
-      ]);
     });
 
-    finalDataRows.push(
-      [],
-      ["样品分析结果"],
-      ["样品名称", "站位", "深度 (m)", "AOU (µmol/kg)", "使用工作曲线", "Area1", "Area2", "Area3", "Area4", "平均面积", "面积SD", "面积RSD (%)", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
-    );
-
-    sortedProcessedSamples.forEach(s => {
-      const closest = findHydroDataForSample(s.station, s.depth);
-      let aouValStr = "-";
-      if (closest) {
-        const sal = findValueByKeywords(closest.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
-        const temp = findValueByKeywords(closest.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
-        const o2 = findValueByKeywords(closest.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
-        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
-          const aouVal = calculateAOU(sal, temp, o2, s.depth !== null ? s.depth : undefined);
-          aouValStr = aouVal.toFixed(2);
-        }
-      }
-
-      const row = [
-        s.sampleName,
-        s.station || "-",
-        s.depth !== null ? s.depth : "-",
-        aouValStr === "-" ? "-" : parseFloat(aouValStr),
-        s.curveName,
-        s.injections[0] !== undefined ? s.injections[0] : "",
-        s.injections[1] !== undefined ? s.injections[1] : "",
-        s.injections[2] !== undefined ? s.injections[2] : "",
-        s.injections[3] !== undefined ? s.injections[3] : "",
-        parseFloat(s.avArea.toFixed(4)),
-        parseFloat(s.sdArea.toFixed(4)),
-        parseFloat(s.rsd.toFixed(2)),
-        parseFloat(s.concentration.toFixed(2)),
-        parseFloat(s.error.toFixed(2)),
-        s.isRejected ? "已废弃" : s.rsd > 2 ? "RSD超标" : "合格"
-      ];
-      finalDataRows.push(row);
-    });
-
-    const wsFinal = xlsx.utils.aoa_to_sheet(finalDataRows);
-    xlsx.utils.book_append_sheet(wb, wsFinal, "DOC_Final_Data");
-
-    // 2. Raw Injections Sheet
-    const rawInjectionsRows: (string | number)[][] = [
-      ["文件名", "样品名称", "样品ID", "注射次数", "分析类型", "峰面积"]
-    ];
-    rawInjections.forEach(inj => {
-      rawInjectionsRows.push([
-        inj.fileName,
-        inj.sampleName,
-        inj.sampleId,
-        inj.injNo,
-        inj.type,
-        inj.area
-      ]);
-    });
-    const wsRaw = xlsx.utils.aoa_to_sheet(rawInjectionsRows);
-    xlsx.utils.book_append_sheet(wb, wsRaw, "Raw_Injections");
-
-    // 3. DOC Concentration Summary Sheet
-    const summarySamples = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank);
-    const sortedSummary = [...summarySamples].sort((a, b) => {
-      const getStationNumber = (st: string | null) => {
-        if (!st) return 0;
-        const match = st.match(/\d+/);
-        return match ? parseInt(match[0], 10) : 0;
+    const summarySamples = processedSamples.map(s => {
+      const evalRes = evaluateSampleQC(s.rsd, undefined, calibrationCurve.rsq);
+      return {
+        ...s,
+        calculatedConc: s.concentration,
+        qcFlag: evalRes.flag
       };
-      const numA = getStationNumber(a.station);
-      const numB = getStationNumber(b.station);
-      if (numA !== numB) {
-        return numB - numA; // Descending (e.g. ST-50 -> ST-1)
-      }
-      const depthA = a.depth !== null ? a.depth : 0;
-      const depthB = b.depth !== null ? b.depth : 0;
-      return depthB - depthA; // Descending (Deepest -> Shallowest)
     });
 
-    const summaryRows: any[][] = [
-      ["DOC 浓度汇总表"],
-      ["排序规则", "大趋势：站位从大到小 (ST-50 ➔ ST-1) | 小趋势：同一个站位内深度从深到浅 (深层 ➔ 表层)"],
-      ["生成时间", new Date().toLocaleString()],
-      [],
-      ["样品名称", "站位", "深度 (m)", "AOU (µmol/kg)", "使用工作曲线", "DOC 浓度 (µmol/L)", "误差 (µmol/L)", "状态"]
-    ];
+    await exportMultiSheetQCExcel(summarySamples, batchAnalysis, stationCoords, hydroSamples);
+  };
 
-    sortedSummary.forEach(s => {
-      const closest = findHydroDataForSample(s.station, s.depth);
-      let aouValStr = "-";
-      if (closest) {
-        const sal = findValueByKeywords(closest.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
-        const temp = findValueByKeywords(closest.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
-        const o2 = findValueByKeywords(closest.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
-        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
-          const aouVal = calculateAOU(sal, temp, o2, s.depth !== null ? s.depth : undefined);
-          aouValStr = aouVal.toFixed(2);
-        }
+  const exportToODVCSV = () => {
+    const activeCurves = calibrationCurves
+      .filter(c => !disabledCurves[c.id])
+      .map(c => ({ id: c.id, name: c.name, fileName: c.fileName, slope: c.slope, intercept: c.intercept, rsq: c.rsq }));
+
+    const calculatedConcs = processedSamples.reduce((acc, s) => {
+      acc[s.id] = s.concentration;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const targetCrmConc = (dswMin + dswMax) / 2;
+
+    const fileMap: Record<string, SampleGroup[]> = {};
+    processedSamples.forEach(g => {
+      if (!fileMap[g.fileName]) {
+        fileMap[g.fileName] = [];
       }
-
-      summaryRows.push([
-        s.sampleName,
-        s.station,
-        s.depth !== null ? s.depth : "-",
-        aouValStr === "-" ? "-" : parseFloat(aouValStr),
-        s.curveName,
-        parseFloat(s.concentration.toFixed(2)),
-        parseFloat(s.error.toFixed(2)),
-        s.isRejected ? "已废弃" : s.rsd > 2 ? "RSD超标" : "合格"
-      ]);
+      fileMap[g.fileName].push(g);
     });
 
-    const wsSummary = xlsx.utils.aoa_to_sheet(summaryRows);
-    xlsx.utils.book_append_sheet(wb, wsSummary, "DOC_Summary");
-
-    // 4. ODV Data Sheet
-    const odvRows: any[][] = [];
-    
-    // Calculate station maximum depth from both hydro and processed samples as final fallback
-    const stationMaxDepths = new Map<string, number>();
-    processedSamples.forEach(ps => {
-      if (ps.station && ps.depth !== null) {
-        const norm = normalizeStationName(ps.station);
-        const curMax = stationMaxDepths.get(norm) || 0;
-        if (ps.depth > curMax) {
-          stationMaxDepths.set(norm, ps.depth);
-        }
-      }
-    });
-    if (hydroSamples) {
-      hydroSamples.forEach(h => {
-        if (h.station && h.depth !== null) {
-          const norm = normalizeStationName(h.station);
-          const curMax = stationMaxDepths.get(norm) || 0;
-          if (h.depth > curMax) {
-            stationMaxDepths.set(norm, h.depth);
-          }
-        }
-      });
-    }
-
-    // ODV headers
-    const odvHeaders = [
-      'Cruise',
-      'Station',
-      'Type',
-      'yyyy-mm-ddThh:mm',
-      'Longitude [degrees_east]',
-      'Latitude [degrees_north]',
-      'Bot. Depth [m]',
-      'Depth [m]'
-    ];
-    // Add CTD parameters if they exist
-    const mappedParamNames = hydroParameters.map(p => mapHeader(p));
-    odvHeaders.push(...mappedParamNames);
-    odvHeaders.push('DOC [µmol/L]', 'AOU [µmol/kg]');
-    odvRows.push(odvHeaders);
-
-    // Filter out rejected/standards/blanks for ODV format
-    const cleanProcessed = processedSamples.filter(s => s.station && !s.isStd && !s.isBlank && !s.isRejected);
-
-    interface OdvExportRow {
-      cruise: string;
-      station: string;
-      type: string;
-      time: string;
-      lat: number | "";
-      lon: number | "";
-      botDepth: number | "";
-      depth: number;
-      ctdValues: Record<string, number>;
-      docValue: number | "";
-      aouValue: number | "";
-    }
-
-    const allRows: OdvExportRow[] = [];
-    const matchedProcessedIds = new Set<string>();
-
-    // Pre-calculate the closest hydro sample for all cleanProcessed samples to avoid loop overhead
-    const processedClosestHydro = new Map<string, HydrologicalSample | null>();
-    cleanProcessed.forEach(s => {
-      processedClosestHydro.set(s.id, findHydroDataForSample(s.station, s.depth));
-    });
-
-    // Pre-group cleanProcessed by their closest hydro sample ID (if it is within 2.5 meters)
-    const processedByClosestHydroId = new Map<string, typeof cleanProcessed>();
-    cleanProcessed.forEach(s => {
-      const closest = processedClosestHydro.get(s.id);
-      if (closest && s.depth !== null && Math.abs(closest.depth - s.depth) <= 2.5) {
-        let list = processedByClosestHydroId.get(closest.id);
-        if (!list) {
-          list = [];
-          processedByClosestHydroId.set(closest.id, list);
-        }
-        list.push(s);
-      }
-    });
-
-    // Helper to get fallback cruise number from files
-    const getFallbackCruise = () => {
-      if (files.length > 0) {
-        const cleanName = files[0].name.split('.')[0].replace(/[^a-zA-Z0-9_-]/g, '');
-        return cleanName || '1';
-      }
-      return '1';
+    const getFileSortPriority = (fileName: string): number => {
+      const activeFileNames = activeCurves.map(c => c.fileName);
+      const idx = activeFileNames.indexOf(fileName);
+      return idx >= 0 ? idx : 999;
     };
 
-    // 1. Process all hydroSamples
-    if (hydroSamples && hydroSamples.length > 0) {
-      hydroSamples.forEach(h => {
-        // Find if there is a matching DOC sample
-        const candidates = processedByClosestHydroId.get(h.id) || [];
-        const match = candidates.find(s => !matchedProcessedIds.has(s.id));
+    const sortedFileEntries = Object.entries(fileMap).sort(([fileA], [fileB]) => getFileSortPriority(fileA) - getFileSortPriority(fileB));
+    const batchAnalysis: ColumnBatchExportData[] = [];
 
-        if (match) {
-          matchedProcessedIds.add(match.id);
-        }
+    sortedFileEntries.forEach(([fileName, sampleList], fileIdx) => {
+      const fileColIdx = fileIdx + 1;
+      const matchingCurves = activeCurves.filter(c => c.fileName === fileName);
 
-        let botDepthVal: number | "" = h.botDepth !== undefined ? h.botDepth : "";
-        if (botDepthVal === "" && h.station) {
-          const normSt = normalizeStationName(h.station);
-          const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
-          if (sc && sc.botDepth !== undefined) {
-            botDepthVal = sc.botDepth;
-          } else {
-            botDepthVal = stationMaxDepths.get(normSt) || "";
+      if (matchingCurves.length > 0) {
+        const isMultiCurveInFile = matchingCurves.length > 1;
+
+        matchingCurves.forEach(calib => {
+          const curveSamples = isMultiCurveInFile
+            ? sampleList.filter(s => (s as any).curveId === calib.id)
+            : sampleList;
+          const activeSampleList = curveSamples.length > 0 ? curveSamples : sampleList;
+
+          const validBlanks = activeSampleList.filter(s => {
+            if (!s.isBlank && !s.sampleName.toLowerCase().includes('blank') && !s.sampleName.toLowerCase().includes('mq')) return false;
+            const lowerId = s.sampleId.toLowerCase();
+            const lowerName = s.sampleName.toLowerCase();
+            if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash') || lowerName.includes('冲洗') || lowerName.includes('清洗')) return false;
+            return true;
+          });
+
+          let blankArea = 0;
+          let blankConcEquiv = 0;
+          if (validBlanks.length > 0) {
+            const areas = validBlanks.map(g => g.avArea).sort((a, b) => a - b);
+            const medianArea = areas.length % 2 === 0
+              ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
+              : areas[Math.floor(areas.length / 2)];
+
+            const filteredBlanks = validBlanks.filter(g => !(medianArea > 0 && g.avArea > Math.max(medianArea * 3.0, 0.3)));
+            const activeBlanks = filteredBlanks.length > 0 ? filteredBlanks : validBlanks;
+            blankArea = activeBlanks.reduce((sum, b) => sum + b.avArea, 0) / activeBlanks.length;
+            blankConcEquiv = calib.slope > 0 ? blankArea / calib.slope : 0;
           }
-        }
 
-        // Calculate AOU
-        const sal = findValueByKeywords(h.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
-        const temp = findValueByKeywords(h.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
-        const o2 = findValueByKeywords(h.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
-        
-        let aouVal: number | "" = "";
-        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
-          aouVal = calculateAOU(sal, temp, o2, h.depth);
-        }
+          let dswCrms = activeSampleList.filter(s => {
+            if ((s as any).isRejected) return false;
+            const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+            const corrected = correctCrmIdentity(s.sampleName, conc);
+            return corrected.actualType === 'DSW';
+          });
 
-        allRows.push({
-          cruise: h.cruise || getFallbackCruise(),
-          station: h.station,
-          type: h.type || 'C',
-          time: h.time || '',
-          lat: h.latitude,
-          lon: h.longitude,
-          botDepth: botDepthVal,
-          depth: h.depth,
-          ctdValues: h.values || {},
-          docValue: match ? match.concentration : "",
-          aouValue: aouVal
+          if (dswCrms.length <= 1) {
+            const fileDsws = sampleList.filter(s => {
+              if ((s as any).isRejected) return false;
+              const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+              const corrected = correctCrmIdentity(s.sampleName, conc);
+              return corrected.actualType === 'DSW';
+            });
+            if (fileDsws.length > dswCrms.length) {
+              dswCrms = fileDsws;
+            }
+          }
+
+          let crmAvgMeasured = 0;
+          let crmRecovery = 0;
+
+          if (dswCrms.length > 0) {
+            const crmConcs = dswCrms.map(c => calculatedConcs[c.id] ?? 0);
+            crmAvgMeasured = crmConcs.reduce((a, b) => a + b, 0) / dswCrms.length;
+            crmRecovery = targetCrmConc > 0 ? (crmAvgMeasured / targetCrmConc) * 100 : 0;
+          }
+
+          const evaluatedSamples = activeSampleList.map(s => {
+            const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+            const evalRes = evaluateSampleQC(s.rsd, crmRecovery > 0 ? crmRecovery : undefined, calib.rsq);
+            return {
+              ...s,
+              calculatedConc: conc,
+              qcFlag: evalRes.flag
+            };
+          });
+
+          batchAnalysis.push({
+            curveId: calib.id,
+            curveName: calib.name,
+            fileName,
+            fileColIdx,
+            slope: calib.slope,
+            intercept: calib.intercept,
+            rsq: calib.rsq,
+            blankArea,
+            blankConcEquiv,
+            crmExpected: targetCrmConc,
+            crmMeasuredAvg: crmAvgMeasured,
+            crmRecovery,
+            samples: evaluatedSamples
+          });
         });
-      });
-    }
-
-    // 2. Process remaining cleanProcessed samples that didn't match any hydro sample
-    cleanProcessed.forEach(s => {
-      if (matchedProcessedIds.has(s.id)) return;
-
-      const hydroData = processedClosestHydro.get(s.id) || null;
-      const lat = hydroData ? hydroData.latitude : (s.latitude !== undefined ? s.latitude : "");
-      const lon = hydroData ? hydroData.longitude : (s.longitude !== undefined ? s.longitude : "");
-      
-      let botDepthVal: number | "" = "";
-      if (hydroData && hydroData.botDepth !== undefined) {
-        botDepthVal = hydroData.botDepth;
-      } else if (s.botDepth !== undefined) {
-        botDepthVal = s.botDepth;
-      } else if (s.station) {
-        const normSt = normalizeStationName(s.station);
-        const sc = stationCoords.find(c => normalizeStationName(c.station) === normSt);
-        if (sc && sc.botDepth !== undefined) {
-          botDepthVal = sc.botDepth;
-        } else {
-          botDepthVal = stationMaxDepths.get(normSt) || "";
-        }
       }
-
-      // Calculate AOU if hydroData is available
-      let aouVal: number | "" = "";
-      if (hydroData) {
-        const sal = findValueByKeywords(hydroData.values || {}, ['salinity', 'sal', 's', '盐度', '盐']);
-        const temp = findValueByKeywords(hydroData.values || {}, ['temperature', 'temp', 't°c', 't', '温度', '温']);
-        const o2 = findValueByKeywords(hydroData.values || {}, ['oxygen', 'o2', 'dox', 'd.o', '溶解氧', '溶氧', '氧']);
-        if (sal !== undefined && temp !== undefined && o2 !== undefined && !isNaN(sal) && !isNaN(temp) && !isNaN(o2)) {
-          aouVal = calculateAOU(sal, temp, o2, s.depth !== null ? s.depth : undefined);
-        }
-      }
-
-      allRows.push({
-        cruise: s.cruise || (hydroData && hydroData.cruise) || getFallbackCruise(),
-        station: s.station || "",
-        type: s.type || (hydroData && hydroData.type) || 'C',
-        time: s.time || (hydroData && hydroData.time) || '',
-        lat: lat !== "" ? Number(lat) : "",
-        lon: lon !== "" ? Number(lon) : "",
-        botDepth: botDepthVal,
-        depth: s.depth !== null ? s.depth : 0,
-        ctdValues: hydroData ? (hydroData.values || {}) : {},
-        docValue: s.concentration,
-        aouValue: aouVal
-      });
     });
 
-    const sortedRows = [...allRows].sort((a, b) => {
-      const getStationNumber = (st: string) => {
-        const match = st.match(/\d+/);
-        return match ? parseInt(match[0], 10) : 0;
-      };
-      const numA = getStationNumber(a.station);
-      const numB = getStationNumber(b.station);
-      if (numA !== numB) {
-        return numB - numA; // Descending (e.g. ST-50 -> ST-1)
-      }
-      return b.depth - a.depth; // Descending (Deepest -> Shallowest)
-    });
-
-    sortedRows.forEach(row => {
-      const excelRow: any[] = [
-        row.cruise,
-        row.station,
-        row.type,
-        row.time,
-        row.lon !== "" ? parseFloat(Number(row.lon).toFixed(6)) : "",
-        row.lat !== "" ? parseFloat(Number(row.lat).toFixed(6)) : "",
-        row.botDepth !== "" ? parseFloat(Number(row.botDepth).toFixed(1)) : "",
-        parseFloat(Number(row.depth).toFixed(1))
-      ];
-      
-      hydroParameters.forEach(p => {
-        if (row.ctdValues[p] !== undefined) {
-          excelRow.push(parseFloat(Number(row.ctdValues[p]).toFixed(4)));
-        } else {
-          excelRow.push("");
-        }
-      });
-      
-      excelRow.push(row.docValue !== "" ? parseFloat(Number(row.docValue).toFixed(2)) : "");
-      excelRow.push(row.aouValue !== "" ? parseFloat(Number(row.aouValue).toFixed(2)) : "");
-      odvRows.push(excelRow);
-    });
-
-    const wsOdv = xlsx.utils.aoa_to_sheet(odvRows);
-    xlsx.utils.book_append_sheet(wb, wsOdv, "ODV_Format_Data");
-
-    // Download files
-    const fileBase = files.length > 0 ? files[0].name.split('.')[0] : 'doc_data';
-    xlsx.writeFile(wb, `${fileBase}_processed.xlsx`);
-
-    // Download separate clean ODV file (without other sheets like Raw/Summary)
-    const wbOdv = xlsx.utils.book_new();
-    const wsOdvClean = xlsx.utils.aoa_to_sheet(odvRows);
-    xlsx.utils.book_append_sheet(wbOdv, wsOdvClean, "ODV_Data");
-    xlsx.writeFile(wbOdv, `${fileBase}_odv.xlsx`);
+    exportODVPlottingCSV(batchAnalysis, stationCoords, hydroSamples);
   };
 
   // Toggle single injection inclusion
@@ -1427,20 +1352,12 @@ export default function App() {
     });
   };
 
-  const handleUpdateInjectionArea = (
-    fileName: string,
-    sampleName: string,
-    sampleId: string,
-    injNo: number,
+  const handleUpdateInjectionAreaByIndex = (
+    targetGlobalIndex: number,
     newArea: number
   ) => {
-    setRawInjections(prev => prev.map(inj => {
-      if (
-        inj.fileName === fileName &&
-        inj.sampleName === sampleName &&
-        inj.sampleId === sampleId &&
-        inj.injNo === injNo
-      ) {
+    setRawInjections(prev => prev.map((inj, idx) => {
+      if (idx === targetGlobalIndex) {
         return { ...inj, area: newArea };
       }
       return inj;
@@ -1461,7 +1378,7 @@ export default function App() {
   const stepLabelMap = [
     "1. 导入数据",
     "2. 工作曲线拟合",
-    "3. 数据审核 & QC",
+    "3. 数据质控 (QC)",
     "4. 剖面图表绘制",
     "5. 生成报表"
   ];
@@ -2049,7 +1966,6 @@ export default function App() {
                         <td>
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                             {std.group.injections.map((area: number, i: number) => {
-                              const injNo = i + 1;
                               return (
                                 <div 
                                   key={i}
@@ -2082,7 +1998,10 @@ export default function App() {
                                     value={area}
                                     onChange={(e) => {
                                       const val = parseFloat(e.target.value) || 0;
-                                      handleUpdateInjectionArea(std.group.fileName, std.group.sampleName, std.group.sampleId, injNo, val);
+                                      const targetGlobalIdx = (std.group as any).rawInjIndices ? (std.group as any).rawInjIndices[i] : -1;
+                                      if (targetGlobalIdx !== -1) {
+                                        handleUpdateInjectionAreaByIndex(targetGlobalIdx, val);
+                                      }
                                     }}
                                     style={{
                                       width: '62px',
@@ -2135,11 +2054,34 @@ export default function App() {
 
         {/* Step 3: Data Inspection */}
         {currentStep === 3 && (
-          <div>
+          <div className="space-y-6">
+            <QCDashboard
+              files={files}
+              groups={processedSamples}
+              calibrationCurvesList={calibrationCurves
+                .filter(c => !disabledCurves[c.id])
+                .map(c => ({ id: c.id, name: c.name, fileName: c.fileName, slope: c.slope, intercept: c.intercept, rsq: c.rsq }))}
+              calibrationMap={calibrationCurves
+                .filter(c => !disabledCurves[c.id])
+                .reduce((acc, c) => {
+                  if (!acc[c.fileName] || c.rsq > (acc[c.fileName].rsq || 0)) {
+                    acc[c.fileName] = { slope: c.slope, intercept: c.intercept, rsq: c.rsq };
+                  }
+                  return acc;
+                }, {} as Record<string, { slope: number; intercept: number; rsq: number }>)}
+              calculatedConcs={processedSamples.reduce((acc, s) => {
+                acc[s.id] = s.concentration;
+                return acc;
+              }, {} as Record<string, number>)}
+              dswTargetConc={(dswMin + dswMax) / 2}
+              stationCoords={stationCoords}
+              hydroSamples={hydroSamples}
+            />
+
             <div className="page-header">
               <div>
-                <h1 className="page-title">数据审核与质控 (QC)</h1>
-                <p className="page-subtitle">第三步：检查样品测量精密度，验证 SSW/DSW 参标，手动剔除野点或异常注射值</p>
+                <h1 className="page-title">样品详细审核与微调</h1>
+                <p className="page-subtitle">检查详细样品进样记录、变异系数 (RSD)，或手动排除离群峰面积</p>
               </div>
             </div>
 
@@ -2249,11 +2191,13 @@ export default function App() {
                 <table className="custom-table">
                   <thead>
                     <tr>
+                      <th>所属柱号</th>
                       <th>工作曲线批次</th>
                       <th>所属文件</th>
                       <th>斜率 (Slope)</th>
                       <th>截距 (Intercept)</th>
                       <th>回归系数 (R²)</th>
+                      <th>MQ Blank (µmol/L)</th>
                       <th>DSW 参标均值 ({dswMin}-{dswMax} µmol/L)</th>
                       <th>SSW 参标均值 ({sswMin}-{sswMax} µmol/L)</th>
                       <th>浓度修正量 (µmol/L)</th>
@@ -2262,28 +2206,74 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {calibrationCurves.map((curve) => {
-                      const curveSamples = processedSamples.filter(s => sampleToCurveMap[s.id] === curve.id && !s.isRejected);
-                      const dsws = curveSamples.filter(s => s.sampleName.toLowerCase() === 'dsw');
-                      const ssws = curveSamples.filter(s => s.sampleName.toLowerCase() === 'ssw');
-                      
-                      const avgDsw = calculateMean(dsws.map(d => d.concentration));
-                      const avgSsw = calculateMean(ssws.map(s => s.concentration));
-                      
-                      const isDswOk = dsws.length === 0 || (avgDsw >= dswMin && avgDsw <= dswMax);
-                      const isSswOk = ssws.length === 0 || (avgSsw >= sswMin && avgSsw <= sswMax);
-                      const status = isDswOk && isSswOk ? "合格" : "超标";
-                      
-                      return (
-                        <tr key={curve.id}>
-                          <td className="font-semibold text-sky-700">{curve.name}</td>
-                          <td className="text-xs text-slate-500">{curve.fileName}</td>
+                    {(() => {
+                      // Get unique active files ordered by physical measurement date
+                      const activeCurves = calibrationCurves
+                        .filter(curve => !disabledCurves[curve.id])
+                        .sort((a, b) => getFileSortPriority(a.fileName) - getFileSortPriority(b.fileName));
+
+                      const uniqueFiles: string[] = [];
+                      activeCurves.forEach(c => {
+                        if (!uniqueFiles.includes(c.fileName)) {
+                          uniqueFiles.push(c.fileName);
+                        }
+                      });
+
+                      return activeCurves.map((curve) => {
+                        const colIdx = uniqueFiles.indexOf(curve.fileName) + 1;
+                        const curveSamples = processedSamples.filter(s => sampleToCurveMap[s.id] === curve.id && !s.isRejected);
+                        const dsws = curveSamples.filter(s => s.sampleName.toLowerCase() === 'dsw');
+                        const ssws = curveSamples.filter(s => s.sampleName.toLowerCase() === 'ssw');
+                        
+                        // Calculate valid MQ Blanks (strictly sampleId === 'Blank', excluding 'Cleaning' & carryover outliers)
+                        const validMqs = curveSamples.filter(s => {
+                          if (!s.isBlank) return false;
+                          const lowerId = s.sampleId.toLowerCase();
+                          const lowerName = s.sampleName.toLowerCase();
+                          if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash')) return false;
+                          return true;
+                        });
+
+                        let mqConc = 0;
+                        if (validMqs.length > 0) {
+                          const areas = validMqs.map(g => g.avArea).sort((a, b) => a - b);
+                          const medianArea = areas.length % 2 === 0
+                            ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
+                            : areas[Math.floor(areas.length / 2)];
+
+                          // Exclude carryover outliers based on raw peak area (e.g. > 3 * medianArea AND area > 0.3)
+                          const filteredMqs = validMqs.filter(g => !(medianArea > 0 && g.avArea > Math.max(medianArea * 3.0, 0.3)));
+                          const activeMqs = filteredMqs.length > 0 ? filteredMqs : validMqs;
+                          const avgRawArea = activeMqs.reduce((sum, b) => sum + b.avArea, 0) / activeMqs.length;
+                          mqConc = curve.slope > 0 ? avgRawArea / curve.slope : 0;
+                        }
+                        
+                        const avgDsw = calculateMean(dsws.map(d => d.concentration));
+                        const avgSsw = calculateMean(ssws.map(s => s.concentration));
+                        
+                        const isDswOk = dsws.length === 0 || (avgDsw >= dswMin && avgDsw <= dswMax);
+                        const isSswOk = ssws.length === 0 || (avgSsw >= sswMin && avgSsw <= sswMax);
+                        // DSW is the primary gold standard for ocean DOC QC. If DSW is pass, batch is passed.
+                        const status = isDswOk ? "合格" : "超标";
+                        
+                        return (
+                          <tr key={curve.id}>
+                            <td className="font-bold text-slate-800">
+                              <span className="px-2 py-0.5 bg-slate-100 border border-slate-300 rounded text-xs">
+                                第 {colIdx} 柱
+                              </span>
+                            </td>
+                            <td className="font-semibold text-sky-700">{curve.name}</td>
+                            <td className="text-xs text-slate-500">{curve.fileName}</td>
                           <td>{curve.slope.toFixed(6)}</td>
                           <td>{curve.intercept.toFixed(6)}</td>
                           <td>
                             <span className={curve.rsq >= 0.99 ? "text-emerald-600 font-semibold" : "text-rose-500 font-semibold"}>
                               {curve.rsq.toFixed(6)}
                             </span>
+                          </td>
+                          <td className="text-sky-700 font-mono font-medium">
+                            {validMqs.length > 0 ? `${mqConc.toFixed(2)}` : "-"}
                           </td>
                           <td className={!isDswOk ? "text-amber-600 font-bold" : "text-slate-700 font-medium"}>
                             {dsws.length > 0 ? `${avgDsw.toFixed(2)}` : "-"}
@@ -2306,25 +2296,65 @@ export default function App() {
                             />
                           </td>
                           <td>
-                            <span className={`badge ${status === '合格' ? 'badge-success' : 'badge-warning'}`}>
-                              {status}
+                            <span className={`badge ${disabledCurves[curve.id] ? 'badge-danger opacity-70' : status === '合格' ? 'badge-success' : 'badge-warning'}`}>
+                              {disabledCurves[curve.id] ? '已停用' : status}
                             </span>
                           </td>
                           <td>
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: '4px 8px', fontSize: '12px' }}
-                              onClick={() => setActiveQcModalCurveId(curve.id)}
-                            >
-                              点击审核
-                            </button>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <button
+                                className="btn btn-secondary"
+                                style={{ padding: '4px 8px', fontSize: '12px' }}
+                                onClick={() => setActiveQcModalCurveId(curve.id)}
+                              >
+                                审核
+                              </button>
+                              <button
+                                className="btn"
+                                style={{
+                                  padding: '4px 8px',
+                                  fontSize: '12px',
+                                  backgroundColor: disabledCurves[curve.id] ? '#10b981' : '#f43f5e',
+                                  color: '#fff',
+                                  border: 'none',
+                                  borderRadius: '6px',
+                                  cursor: 'pointer'
+                                }}
+                                onClick={() => setDisabledCurves(prev => ({
+                                  ...prev,
+                                  [curve.id]: !prev[curve.id]
+                                }))}
+                              >
+                                {disabledCurves[curve.id] ? '恢复' : '停用'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
-                    })}
+                    });
+                  })()}
                   </tbody>
                 </table>
               </div>
+              {Object.keys(disabledCurves).filter(k => disabledCurves[k]).length > 0 && (
+                <div style={{ marginTop: '12px', padding: '10px 14px', backgroundColor: '#fff1f2', borderRadius: '8px', border: '1px solid #fecdd3', fontSize: '12px', color: '#be123c', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>
+                    ⚠️ 已停用 {Object.keys(disabledCurves).filter(k => disabledCurves[k]).length} 根工作曲线（已从上方列表中剔除，后方柱号已自动连续递补）。
+                  </span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {calibrationCurves.filter(c => disabledCurves[c.id]).map(c => (
+                      <button
+                        key={c.id}
+                        onClick={() => setDisabledCurves(prev => ({ ...prev, [c.id]: false }))}
+                        className="btn"
+                        style={{ padding: '2px 8px', fontSize: '11px', backgroundColor: '#fff', border: '1px solid #f43f5e', color: '#be123c', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        恢复 {c.fileName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="card">
@@ -2503,7 +2533,6 @@ export default function App() {
                           <td>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                               {s.injections.map((area, i) => {
-                                const injNo = i + 1;
                                 const offset = curveOffsets[s.curveId] || 0;
                                 const injConc = (area - intercept) / slope + offset;
                                 return (
@@ -2540,7 +2569,10 @@ export default function App() {
                                         value={area}
                                         onChange={(e) => {
                                           const val = parseFloat(e.target.value) || 0;
-                                          handleUpdateInjectionArea(s.fileName, s.sampleName, s.sampleId, injNo, val);
+                                           const targetGlobalIdx = (s as any).rawInjIndices ? (s as any).rawInjIndices[i] : -1;
+                                           if (targetGlobalIdx !== -1) {
+                                             handleUpdateInjectionAreaByIndex(targetGlobalIdx, val);
+                                           }
                                         }}
                                         style={{
                                           width: '62px',
@@ -2822,7 +2854,6 @@ export default function App() {
                             <td>
                               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                 {s.injections.map((area, i) => {
-                                  const injNo = i + 1;
                                   const offset = curveOffsets[curve.id] || 0;
                                   const injConc = (area - curve.intercept) / curve.slope + offset;
                                   return (
@@ -2859,7 +2890,10 @@ export default function App() {
                                           value={area}
                                           onChange={(e) => {
                                             const val = parseFloat(e.target.value) || 0;
-                                            handleUpdateInjectionArea(s.fileName, s.sampleName, s.sampleId, injNo, val);
+                                            const targetGlobalIdx = (s as any).rawInjIndices ? (s as any).rawInjIndices[i] : -1;
+                                           if (targetGlobalIdx !== -1) {
+                                             handleUpdateInjectionAreaByIndex(targetGlobalIdx, val);
+                                           }
                                           }}
                                           style={{
                                             width: '62px',
@@ -2963,10 +2997,20 @@ export default function App() {
                 </div>
               </div>
 
-              <button className="btn btn-primary w-full justify-center py-3 text-base" onClick={exportToExcel}>
-                <Download size={18} />
-                <span>一键下载 Excel 处理报表</span>
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <button className="btn btn-primary w-full justify-center py-3 text-base" onClick={exportToExcel}>
+                  <Download size={18} />
+                  <span>一键下载 Excel 结构化处理报表 (.xlsx)</span>
+                </button>
+                <button
+                  className="btn btn-secondary w-full justify-center py-3 text-base"
+                  style={{ backgroundColor: '#0284c7', color: '#ffffff', borderColor: '#0284c7' }}
+                  onClick={exportToODVCSV}
+                >
+                  <FileSpreadsheet size={18} />
+                  <span>导出 ODV 绘图专用 CSV 文件 (.csv)</span>
+                </button>
+              </div>
             </div>
           </div>
         )}

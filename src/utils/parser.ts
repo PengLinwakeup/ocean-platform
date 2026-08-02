@@ -64,7 +64,8 @@ export function parseRawTxt(content: string, fileName: string): RawInjection[] {
           sampleId: sampleId || '未命名',
           injNo: isNaN(injNo) ? 1 : injNo,
           type,
-          area: areaVal
+          area: areaVal,
+          globalIndex: i
         });
     }
   }
