@@ -839,10 +839,16 @@ export default function App() {
           activePoints.push({ x: theoreticalC, y: areaToFit });
         }
 
+        const displayStdName = (Math.abs(matchedUsedC - 340.1) < 0.2 || std.sampleName.includes('340.1'))
+          ? 'std(340.1uM-0627)'
+          : (Math.abs(matchedUsedC - 360) < 1 || std.sampleName.includes('360') || std.sampleName.includes('374.1'))
+            ? 'std(360uM-0625)'
+            : std.sampleName;
+
         return {
           id: std.id,
           index: stdIndex,
-          sampleName: std.sampleName,
+          sampleName: displayStdName,
           avArea: std.avArea,
           correctedArea: areaToFit,
           dilution: currentDilution,
