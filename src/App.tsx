@@ -523,7 +523,14 @@ export default function App() {
     // Finalize groups: calculate average, standard deviation, classifications
     return groups.map((g, idx) => {
       const id = `${g.fileName}::${g.sampleName}::${g.sampleId}::${idx}`;
-      const displayName = customSampleNames[id] !== undefined ? customSampleNames[id] : g.sampleName;
+      let displayName = customSampleNames[id] !== undefined ? customSampleNames[id] : g.sampleName;
+      if (customSampleNames[id] === undefined) {
+        if (displayName.includes('374.1')) {
+          displayName = displayName.replace(/374\.1uM-0625/i, '360uM-0625').replace(/374\.1uM/i, '360uM-0625').replace(/374\.1/i, '360');
+        } else if (displayName.includes('340.1')) {
+          displayName = displayName.replace(/std\(340\.1uM\)/i, 'std(340.1uM-0627)').replace(/std\(340\.1uM-[^\)]*\)/i, 'std(340.1uM-0627)');
+        }
+      }
 
       const isStd = displayName.toLowerCase().includes('std');
       const isBlank = (
@@ -810,9 +817,15 @@ export default function App() {
         const customC = customStdUsedCs[std.id];
         let matchedUsedC = customC !== undefined ? customC : stdUsedC;
         if (customC === undefined) {
-          const cMatch = std.sampleName.match(/std\((\d+\.?\d*)uM/i);
-          if (cMatch) {
-            matchedUsedC = parseFloat(cMatch[1]);
+          if (std.sampleName.includes('374.1') || std.sampleName.includes('360')) {
+            matchedUsedC = 360.0;
+          } else if (std.sampleName.includes('340.1')) {
+            matchedUsedC = 340.1;
+          } else {
+            const cMatch = std.sampleName.match(/std\((\d+\.?\d*)uM/i);
+            if (cMatch) {
+              matchedUsedC = parseFloat(cMatch[1]);
+            }
           }
         }
 
