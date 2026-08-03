@@ -87,6 +87,7 @@ export default function App() {
   const [emptyInjectionThreshold, setEmptyInjectionThreshold] = useState<number>(() => loadSavedState('ocean_emptyInjectionThreshold', 0.1));
   const [dswMin, setDswMin] = useState<number>(() => loadSavedState('ocean_dswMin', 41));
   const [dswMax, setDswMax] = useState<number>(() => loadSavedState('ocean_dswMax', 45));
+  const [dswTargetConc, setDswTargetConc] = useState<number>(() => loadSavedState('ocean_dswTargetConc', (loadSavedState('ocean_dswMin', 41) + loadSavedState('ocean_dswMax', 45)) / 2));
   const [sswMin, setSswMin] = useState<number>(() => loadSavedState('ocean_sswMin', 70));
   const [sswMax, setSswMax] = useState<number>(() => loadSavedState('ocean_sswMax', 80));
   const [curveOffsets, setCurveOffsets] = useState<Record<string, number>>(() => loadSavedState('ocean_curveOffsets', {}));
@@ -118,6 +119,7 @@ export default function App() {
     localStorage.setItem('ocean_emptyInjectionThreshold', JSON.stringify(emptyInjectionThreshold));
     localStorage.setItem('ocean_dswMin', JSON.stringify(dswMin));
     localStorage.setItem('ocean_dswMax', JSON.stringify(dswMax));
+    localStorage.setItem('ocean_dswTargetConc', JSON.stringify(dswTargetConc));
     localStorage.setItem('ocean_sswMin', JSON.stringify(sswMin));
     localStorage.setItem('ocean_sswMax', JSON.stringify(sswMax));
     localStorage.setItem('ocean_curveOffsets', JSON.stringify(curveOffsets));
@@ -1103,7 +1105,7 @@ export default function App() {
       return acc;
     }, {} as Record<string, number>);
 
-    const targetCrmConc = (dswMin + dswMax) / 2;
+    const targetCrmConc = dswTargetConc;
 
     const fileMap: Record<string, SampleGroup[]> = {};
     processedSamples.forEach(g => {
@@ -1236,7 +1238,7 @@ export default function App() {
       return acc;
     }, {} as Record<string, number>);
 
-    const targetCrmConc = (dswMin + dswMax) / 2;
+    const targetCrmConc = dswTargetConc;
 
     const fileMap: Record<string, SampleGroup[]> = {};
     processedSamples.forEach(g => {
@@ -2092,7 +2094,8 @@ export default function App() {
                 acc[s.id] = s.concentration;
                 return acc;
               }, {} as Record<string, number>)}
-              dswTargetConc={(dswMin + dswMax) / 2}
+              targetCrmConc={dswTargetConc}
+              onTargetCrmConcChange={setDswTargetConc}
               stationCoords={stationCoords}
               hydroSamples={hydroSamples}
             />

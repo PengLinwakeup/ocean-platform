@@ -29,6 +29,8 @@ interface QCDashboardProps {
   calibrationCurvesList?: { id: string; name: string; fileName: string; slope: number; intercept: number; rsq: number }[];
   calculatedConcs: Record<string, number>;
   dswTargetConc?: number;
+  targetCrmConc?: number;
+  onTargetCrmConcChange?: (val: number) => void;
   stationCoords?: ExcelSampleInfo[];
   hydroSamples?: any[];
 }
@@ -39,11 +41,21 @@ export default function QCDashboard({
   calibrationCurvesList = [],
   calculatedConcs,
   dswTargetConc = 42.0, // Default Deep Sea Water CRM concentration in uM C
+  targetCrmConc: propTargetCrmConc,
+  onTargetCrmConcChange,
   stationCoords = [],
   hydroSamples = []
 }: QCDashboardProps) {
   const [selectedFlagFilter, setSelectedFlagFilter] = useState<number | 'ALL'>('ALL');
-  const [targetCrmConc, setTargetCrmConc] = useState<number>(dswTargetConc);
+  const [localTargetCrmConc, setLocalTargetCrmConc] = useState<number>(dswTargetConc);
+
+  const targetCrmConc = propTargetCrmConc !== undefined ? propTargetCrmConc : localTargetCrmConc;
+  const handleTargetCrmConcChange = (val: number) => {
+    setLocalTargetCrmConc(val);
+    if (onTargetCrmConcChange) {
+      onTargetCrmConcChange(val);
+    }
+  };
 
   // Helper for sorting files by physical measurement date & batch priority
   const getFileSortPriority = (fileName: string): number => {
@@ -330,7 +342,7 @@ export default function QCDashboard({
               type="number"
               step="0.1"
               value={targetCrmConc}
-              onChange={e => setTargetCrmConc(Number(e.target.value))}
+              onChange={e => handleTargetCrmConcChange(Number(e.target.value))}
               className="w-24 bg-slate-900 border border-slate-700 text-white font-bold px-3 py-1.5 rounded-lg focus:outline-none focus:border-emerald-500"
             />
             <span className="text-sm text-slate-300">μmol C/L</span>
