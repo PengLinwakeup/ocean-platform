@@ -69,7 +69,7 @@ else:
     chl_data += 1.0 * np.exp(-((lat_grid + 55) ** 2) / 300)
     chl_data = np.clip(chl_data, 0.04, 3.16)
 
-# 1. Render Surface Chl Map (SPECTRAL_R & PROMINENT WHITE-CENTER RED PIN DOTS)
+# 1. Render Surface Chl Map (NO BLACK COASTLINE EDGES FOR CLEAN CONTINENTS)
 fig = plt.figure(figsize=(12, 6), dpi=200, facecolor="none")
 ax1 = fig.add_axes([0, 0, 1, 1], projection=ccrs.PlateCarree())
 ax1.set_extent([-180, 180, -90, 90], crs=ccrs.PlateCarree())
@@ -87,8 +87,7 @@ mesh1 = ax1.pcolormesh(
     norm=plt.cm.colors.LogNorm(vmin=0.04, vmax=3.16),
     zorder=1,
 )
-ax1.add_feature(cfeature.LAND, facecolor="#E2E8F0", edgecolor="#475569", linewidth=0.6, zorder=2)
-ax1.add_feature(cfeature.COASTLINE, linewidth=0.6, edgecolor="#334155", zorder=3)
+ax1.add_feature(cfeature.LAND, facecolor="#E2E8F0", edgecolor="none", zorder=2)
 
 st_lons = [st["Lon"] for st in stations]
 st_lats = [st["Lat"] for st in stations]
@@ -138,7 +137,7 @@ plt.savefig(
 )
 plt.close()
 
-# 2. Render Bottom OMZ Map
+# 2. Render Bottom OMZ Map (NO BLACK COASTLINE EDGES FOR CLEAN CONTINENTS)
 woa_path = "data/woa18_omz_min_extracted.nc"
 if os.path.exists(woa_path):
   ds_omz = xr.open_dataset(woa_path, decode_times=False)
@@ -168,8 +167,7 @@ mesh2 = ax2.pcolormesh(
     transform=ccrs.PlateCarree(),
     zorder=1,
 )
-ax2.add_feature(cfeature.LAND, facecolor="#E2E8F0", edgecolor="#475569", linewidth=0.6, zorder=2)
-ax2.add_feature(cfeature.COASTLINE, linewidth=0.6, edgecolor="#334155", zorder=3)
+ax2.add_feature(cfeature.LAND, facecolor="#E2E8F0", edgecolor="none", zorder=2)
 plt.savefig("bottom_omz.png", dpi=200, pad_inches=0, transparent=True, facecolor="none")
 plt.close()
 
@@ -207,7 +205,7 @@ plt.savefig(
 plt.close()
 
 # 3. Composite 3D Perspective with TRUE ALPHA COMPOSITE TRANSPARENT GLASS CURTAIN
-print("=== 3. Compositing 3D Ocean Cube with True-Alpha Transparent Glass Curtain ===")
+print("=== 3. Compositing 3D Ocean Cube with Clean Coastline-Edge-Free Maps ===")
 img_top_map = cv2.imread("surface_chl.png", cv2.IMREAD_UNCHANGED)
 img_bot_map = cv2.imread("bottom_omz.png", cv2.IMREAD_UNCHANGED)
 
@@ -258,7 +256,7 @@ for c_lon, c_lat in corner_coords:
   cx_b, cy_b = project_pt(c_lon, c_lat, M_bot)
   draw_p.line([(cx_t, cy_t), (cx_b, cy_b)], fill=(51, 65, 85, 240), width=5)
 
-# Layer 2b: GROUNDED TRANSECT SECTION CURTAIN (FIX PIL ALPHA BUG WITH Image.alpha_composite!)
+# Layer 2b: GROUNDED TRANSECT SECTION CURTAIN
 top_track_pts = [project_pt(st["Lon"], st["Lat"], M_top) for st in stations]
 bot_track_pts = [project_pt(st["Lon"], st["Lat"], M_bot) for st in stations]
 
@@ -357,11 +355,11 @@ pil_img.save(output_perfect)
 
 # Save PNG copy to user target path
 user_target_png1 = os.path.join(target_out_dir, "3d_ocean_cube_perfect.png")
-user_target_png2 = os.path.join(target_out_dir, "3d_ocean_cube_true_alpha_transparent_fixed.png")
+user_target_png2 = os.path.join(target_out_dir, "3d_ocean_cube_no_coastline_edges.png")
 pil_img.save(user_target_png1)
 pil_img.save(user_target_png2)
 
-print(f"=== 4. TRUE ALPHA TRANSPARENT CURTAIN RENDERS SAVED TO: {output_perfect} & {user_target_png1} ===")
+print(f"=== 4. COASTLINE-EDGE-FREE RENDERS SAVED TO: {output_perfect} & {user_target_png1} ===")
 
 # 5. EXPORT HIGH-PRECISION SVG & PDF VECTOR FILES (WITH PERMISSION ERROR FALLBACK)
 print("=== 5. Exporting High-Precision Vector SVG and PDF Files ===")
@@ -394,10 +392,10 @@ except Exception as e:
 try:
     plt.savefig(user_target_pdf, format='pdf', bbox_inches='tight', pad_inches=0, transparent=True)
 except Exception as e:
-    print(f"Target PDF file locked by PDF viewer. Saving as 3d_ocean_cube_perfect_v12.pdf instead.")
-    alt_pdf = os.path.join(target_out_dir, "3d_ocean_cube_perfect_v12.pdf")
+    print(f"Target PDF file locked by PDF viewer. Saving as 3d_ocean_cube_perfect_v13.pdf instead.")
+    alt_pdf = os.path.join(target_out_dir, "3d_ocean_cube_perfect_v13.pdf")
     plt.savefig(alt_pdf, format='pdf', bbox_inches='tight', pad_inches=0, transparent=True)
 
 plt.close()
 
-print(f"=== 6. ALL TRUE ALPHA TRANSPARENT VECTOR OUTPUTS EXPORTED TO {target_out_dir} ===")
+print(f"=== 6. ALL COASTLINE-EDGE-FREE VECTOR OUTPUTS EXPORTED TO {target_out_dir} ===")
