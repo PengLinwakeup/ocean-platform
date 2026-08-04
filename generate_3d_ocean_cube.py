@@ -69,7 +69,10 @@ else:
     chl_data += 1.0 * np.exp(-((lat_grid + 55) ** 2) / 300)
     chl_data = np.clip(chl_data, 0.04, 3.16)
 
-# 1. Render Surface Chl Map (NO BLACK COASTLINE EDGES FOR CLEAN CONTINENTS)
+st_lons = [st["Lon"] for st in stations]
+st_lats = [st["Lat"] for st in stations]
+
+# 1. Render Surface Chl Map (NO BLACK COASTLINE EDGES & PROMINENT STATIONS)
 fig = plt.figure(figsize=(12, 6), dpi=200, facecolor="none")
 ax1 = fig.add_axes([0, 0, 1, 1], projection=ccrs.PlateCarree())
 ax1.set_extent([-180, 180, -90, 90], crs=ccrs.PlateCarree())
@@ -89,8 +92,6 @@ mesh1 = ax1.pcolormesh(
 )
 ax1.add_feature(cfeature.LAND, facecolor="#E2E8F0", edgecolor="none", zorder=2)
 
-st_lons = [st["Lon"] for st in stations]
-st_lats = [st["Lat"] for st in stations]
 ax1.plot(
     st_lons,
     st_lats,
@@ -137,7 +138,7 @@ plt.savefig(
 )
 plt.close()
 
-# 2. Render Bottom OMZ Map (NO BLACK COASTLINE EDGES FOR CLEAN CONTINENTS)
+# 2. Render Bottom OMZ Map (NO BLACK COASTLINE EDGES & MATCHING STATIONS)
 woa_path = "data/woa18_omz_min_extracted.nc"
 if os.path.exists(woa_path):
   ds_omz = xr.open_dataset(woa_path, decode_times=False)
@@ -168,6 +169,21 @@ mesh2 = ax2.pcolormesh(
     zorder=1,
 )
 ax2.add_feature(cfeature.LAND, facecolor="#E2E8F0", edgecolor="none", zorder=2)
+
+# Draw exact same matching track on bottom map
+ax2.plot(
+    st_lons,
+    st_lats,
+    color="#E11D48",
+    linewidth=2.5,
+    marker="o",
+    markerfacecolor="white",
+    markeredgecolor="#E11D48",
+    markeredgewidth=2.0,
+    markersize=7.0,
+    transform=ccrs.PlateCarree(),
+    zorder=4,
+)
 plt.savefig("bottom_omz.png", dpi=200, pad_inches=0, transparent=True, facecolor="none")
 plt.close()
 
@@ -204,8 +220,8 @@ plt.savefig(
 )
 plt.close()
 
-# 3. Composite 3D Perspective with TRUE ALPHA COMPOSITE TRANSPARENT GLASS CURTAIN
-print("=== 3. Compositing 3D Ocean Cube with Clean Maps & 'OMZ Core' Depth Label ===")
+# 3. Composite 3D Perspective with 100% MATCHING STATIONS & ULTRA-CLEAN 3D CURTAIN FRAME
+print("=== 3. Compositing 3D Ocean Cube with 100% Matching Stations & Ultra-Clean Frame ===")
 img_top_map = cv2.imread("surface_chl.png", cv2.IMREAD_UNCHANGED)
 img_bot_map = cv2.imread("bottom_omz.png", cv2.IMREAD_UNCHANGED)
 
@@ -249,7 +265,7 @@ canvas = overlay_rgba(canvas, warped_bot)
 pillar_img = Image.fromarray(canvas)
 draw_p = ImageDraw.Draw(pillar_img)
 
-# Layer 2a: Corner Pillars
+# Layer 2a: Corner Pillars (5.0pt, #334155)
 corner_coords = [(-180, 90), (180, 90), (-180, -90), (180, -90)]
 for c_lon, c_lat in corner_coords:
   cx_t, cy_t = project_pt(c_lon, c_lat, M_top)
@@ -274,11 +290,10 @@ draw_c.polygon(
 pillar_img = Image.alpha_composite(pillar_img, curtain_layer)
 draw_p = ImageDraw.Draw(pillar_img)
 
-# Layer 2c: Clean Station Pin Pillars & Bottom Anchor Dots
-rep_stations = ["ST-10", "ST-16", "ST-20", "ST-24", "ST-28", "ST-32", "ST-36", "ST-40", "ST-50"]
-pillar_stations = [st for st in stations if st["Station"] in rep_stations]
-
-for st in pillar_stations:
+# Layer 2c: 3 Clean Key Structural Pillars (Start ST-10, Mid ST-30, End ST-51) & Bottom Station Dots
+key_indices = [0, len(stations) // 2, len(stations) - 1]
+for idx in key_indices:
+  st = stations[idx]
   x_t, y_t = project_pt(st["Lon"], st["Lat"], M_top)
   x_b, y_b = project_pt(st["Lon"], st["Lat"], M_bot)
 
@@ -289,8 +304,11 @@ for st in pillar_stations:
       y2 = y_t + (y_b - y_t) * ((seg + 1) / segments)
       x1 = x_t + (x_b - x_t) * (seg / segments)
       x2 = x_t + (x_b - x_t) * ((seg + 1) / segments)
-      draw_p.line([(x1, y1), (x2, y2)], fill=(71, 85, 105, 200), width=2)
+      draw_p.line([(x1, y1), (x2, y2)], fill=(71, 85, 105, 220), width=2)
 
+# Draw bottom station pin dots for ALL stations to match top track 100%!
+for st in stations:
+  x_b, y_b = project_pt(st["Lon"], st["Lat"], M_bot)
   draw_p.ellipse([x_b - 5, y_b - 5, x_b + 5, y_b + 5], fill=(255, 255, 255, 255), outline=(225, 29, 72, 255), width=2)
 
 # Layer 3: Overlay Top Map ON TOP of Pillars & Transparent Glass Curtain Layer
@@ -301,8 +319,8 @@ canvas = overlay_rgba(canvas, warped_top)
 pil_img = Image.fromarray(canvas)
 draw = ImageDraw.Draw(pil_img)
 
-# Layer 4: Re-draw Top Map Station Pin Dots (White-Center Red Border) so they are 100% CRISP and PROMINENT on top map!
-for st in pillar_stations:
+# Layer 4: Re-draw Top Map Station Pin Dots (White-Center Red Border) for ALL stations so they match bottom 100%!
+for st in stations:
   x_t, y_t = project_pt(st["Lon"], st["Lat"], M_top)
   draw.ellipse([x_t - 6, y_t - 6, x_t + 6, y_t + 6], fill=(255, 255, 255, 255), outline=(225, 29, 72, 255), width=2)
 
@@ -355,11 +373,11 @@ pil_img.save(output_perfect)
 
 # Save PNG copy to user target path
 user_target_png1 = os.path.join(target_out_dir, "3d_ocean_cube_perfect.png")
-user_target_png2 = os.path.join(target_out_dir, "3d_ocean_cube_omz_core_tag.png")
+user_target_png2 = os.path.join(target_out_dir, "3d_ocean_cube_100percent_matching_stations.png")
 pil_img.save(user_target_png1)
 pil_img.save(user_target_png2)
 
-print(f"=== 4. OMZ CORE DEPTH LABEL RENDERS SAVED TO: {output_perfect} & {user_target_png1} ===")
+print(f"=== 4. 100% MATCHING STATIONS & ULTRA-CLEAN FRAME RENDERS SAVED TO: {output_perfect} & {user_target_png1} ===")
 
 # 5. EXPORT HIGH-PRECISION SVG & PDF VECTOR FILES (WITH PERMISSION ERROR FALLBACK)
 print("=== 5. Exporting High-Precision Vector SVG and PDF Files ===")
@@ -392,10 +410,10 @@ except Exception as e:
 try:
     plt.savefig(user_target_pdf, format='pdf', bbox_inches='tight', pad_inches=0, transparent=True)
 except Exception as e:
-    print(f"Target PDF file locked by PDF viewer. Saving as 3d_ocean_cube_perfect_v14.pdf instead.")
-    alt_pdf = os.path.join(target_out_dir, "3d_ocean_cube_perfect_v14.pdf")
+    print(f"Target PDF file locked by PDF viewer. Saving as 3d_ocean_cube_perfect_v15.pdf instead.")
+    alt_pdf = os.path.join(target_out_dir, "3d_ocean_cube_perfect_v15.pdf")
     plt.savefig(alt_pdf, format='pdf', bbox_inches='tight', pad_inches=0, transparent=True)
 
 plt.close()
 
-print(f"=== 6. ALL OMZ CORE VECTOR OUTPUTS EXPORTED TO {target_out_dir} ===")
+print(f"=== 6. ALL 100% MATCHING STATIONS VECTOR OUTPUTS EXPORTED TO {target_out_dir} ===")
