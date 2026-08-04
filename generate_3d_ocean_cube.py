@@ -205,7 +205,7 @@ plt.savefig(
 plt.close()
 
 # 3. Composite 3D Perspective with TRUE ALPHA COMPOSITE TRANSPARENT GLASS CURTAIN
-print("=== 3. Compositing 3D Ocean Cube with Clean Coastline-Edge-Free Maps ===")
+print("=== 3. Compositing 3D Ocean Cube with Clean Maps & 'OMZ Core' Depth Label ===")
 img_top_map = cv2.imread("surface_chl.png", cv2.IMREAD_UNCHANGED)
 img_bot_map = cv2.imread("bottom_omz.png", cv2.IMREAD_UNCHANGED)
 
@@ -313,7 +313,7 @@ except:
   font_large = ImageFont.load_default()
   font_medium = ImageFont.load_default()
 
-# 5. 3D 透视锚点与 Pointer (CONCISE DEPTH TAGS: '0m' & '~500m')
+# 5. 3D 透视锚点与 Pointer (RIGOROUS OCEANOGRAPHIC DEPTH TAGS: '0m' & 'OMZ Core')
 pt_0m = project_pt(-180, 90, M_top)    # 顶部地图左上角 (460, 200)
 pt_500m = project_pt(-180, 90, M_bot)   # OMZ 地图左上角 (460, 910)
 
@@ -327,8 +327,8 @@ ty1 = int(pt_0m[1]) - th1 // 2
 draw.text((tx1, ty1), text1, fill=(15, 23, 42), font=font_large)
 draw.line([(400, int(pt_0m[1])), (int(pt_0m[0]), int(pt_0m[1]))], fill=(15, 23, 42), width=3)
 
-# '~500m' Pointer: Text Right Edge at X = 390, Line from 400 to 460
-text2 = "~500m"
+# 'OMZ Core' Pointer: Text Right Edge at X = 390, Line from 400 to 460
+text2 = "OMZ Core"
 bbox2 = font_large.getbbox(text2)
 tw2 = bbox2[2] - bbox2[0]
 th2 = bbox2[3] - bbox2[1]
@@ -355,11 +355,11 @@ pil_img.save(output_perfect)
 
 # Save PNG copy to user target path
 user_target_png1 = os.path.join(target_out_dir, "3d_ocean_cube_perfect.png")
-user_target_png2 = os.path.join(target_out_dir, "3d_ocean_cube_no_coastline_edges.png")
+user_target_png2 = os.path.join(target_out_dir, "3d_ocean_cube_omz_core_tag.png")
 pil_img.save(user_target_png1)
 pil_img.save(user_target_png2)
 
-print(f"=== 4. COASTLINE-EDGE-FREE RENDERS SAVED TO: {output_perfect} & {user_target_png1} ===")
+print(f"=== 4. OMZ CORE DEPTH LABEL RENDERS SAVED TO: {output_perfect} & {user_target_png1} ===")
 
 # 5. EXPORT HIGH-PRECISION SVG & PDF VECTOR FILES (WITH PERMISSION ERROR FALLBACK)
 print("=== 5. Exporting High-Precision Vector SVG and PDF Files ===")
@@ -392,10 +392,10 @@ except Exception as e:
 try:
     plt.savefig(user_target_pdf, format='pdf', bbox_inches='tight', pad_inches=0, transparent=True)
 except Exception as e:
-    print(f"Target PDF file locked by PDF viewer. Saving as 3d_ocean_cube_perfect_v13.pdf instead.")
-    alt_pdf = os.path.join(target_out_dir, "3d_ocean_cube_perfect_v13.pdf")
+    print(f"Target PDF file locked by PDF viewer. Saving as 3d_ocean_cube_perfect_v14.pdf instead.")
+    alt_pdf = os.path.join(target_out_dir, "3d_ocean_cube_perfect_v14.pdf")
     plt.savefig(alt_pdf, format='pdf', bbox_inches='tight', pad_inches=0, transparent=True)
 
 plt.close()
 
-print(f"=== 6. ALL COASTLINE-EDGE-FREE VECTOR OUTPUTS EXPORTED TO {target_out_dir} ===")
+print(f"=== 6. ALL OMZ CORE VECTOR OUTPUTS EXPORTED TO {target_out_dir} ===")
