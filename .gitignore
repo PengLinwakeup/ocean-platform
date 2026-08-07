@@ -36,3 +36,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Data files
 *.txt
 *.xlsx
+
+# Exclude large netCDF datasets
+data/*.nc
+*.nc
