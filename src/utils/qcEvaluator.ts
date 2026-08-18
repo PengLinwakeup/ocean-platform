@@ -23,35 +23,60 @@ export interface CurveQCInfo {
 }
 
 /**
- * Evaluate Quality Control Flag (Flag 1 to Flag 4) for a given sample or curve.
+ * Evaluate Quality Control Flag (Flag 1 to Flag 4/5) for a given sample or curve.
  * 
  * Criteria:
  * - Flag 1 (Pass / Excellent): CRM Recovery 98-102%, RSD < 1.5%, Curve R² >= 0.999
  * - Flag 2 (Good / Qualified): CRM Recovery 95-105%, RSD < 3.0%, Curve R² >= 0.995
  * - Flag 3 (Warning / Suspect): CRM Recovery 90-95% or 105-110%, RSD 3.0-5.0%, R² >= 0.990
- * - Flag 4 (Reject / Bad): Recovery < 90% or > 110%, RSD > 5.0%, or R² < 0.990
+ * - Flag 4 (Reject / Deep-Sea 20-30 Anomaly / Bad): Recovery < 90% or > 110%, RSD > 5.0%, R² < 0.990, or Deep Sea DOC < 36 μM
  */
 export function evaluateSampleQC(
   rsd: number,
   crmRecovery?: number,
-  rsq?: number
+  rsq?: number,
+  depth?: number | null,
+  conc?: number | null,
+  isSample: boolean = false
 ): QCFlagResult {
   const reasons: string[] = [];
 
   let flag: QCFlagLevel = 1;
 
-  // Check RSD
+  // 1. Check RSD
   if (rsd > 5.0) {
     flag = 4;
-    reasons.push(`平行样进样变异系数较高 (RSD = ${rsd.toFixed(2)}% > 5.0%)`);
+    reasons.push(`平行样进样变异系数超标 (RSD = ${rsd.toFixed(2)}% > 5.0%)`);
   } else if (rsd > 3.0) {
     flag = Math.max(flag, 3) as QCFlagLevel;
-    reasons.push(`平行样变异系数稍高 (RSD = ${rsd.toFixed(2)}%)`);
+    reasons.push(`平行样变异系数关注 (RSD = ${rsd.toFixed(2)}%)`);
   } else if (rsd > 1.5) {
     flag = Math.max(flag, 2) as QCFlagLevel;
     reasons.push(`平行样变异系数良好 (RSD = ${rsd.toFixed(2)}%)`);
   } else {
     reasons.push(`平行样重现性极佳 (RSD = ${rsd.toFixed(2)}% <= 1.5%)`);
+  }
+
+  // 2. Check Sample Specific Oceanographic Climatology & Physical Anomalies
+  if (isSample && conc !== undefined && conc !== null) {
+    if (conc < 5.0) {
+      flag = 4;
+      reasons.push(`【严重异常】疑似进样针空吸或无试样注入 (DOC = ${conc.toFixed(2)} μM < 5 μM)`);
+    } else if (conc > 150.0) {
+      flag = 4;
+      reasons.push(`【严重异常】浓度异常突增 (DOC = ${conc.toFixed(1)} μM > 150 μM)，疑似气泡或外源污染`);
+    } else if (depth !== undefined && depth !== null && depth >= 1000) {
+      // Deep sea environment (>1000m): climatological baseline should be 36-46 uM
+      if (conc < 36.0) {
+        flag = 4;
+        reasons.push(
+          `【深海异常偏低】深度 ${depth.toFixed(0)}m 处 DOC 仅 ${conc.toFixed(2)} μM (低于深水气候态 36 μM，典型 20-30 假象；建议时序动态 Rf 校正)`
+        );
+      } else if (conc > 48.0) {
+        flag = Math.max(flag, 3) as QCFlagLevel;
+        reasons.push(`【深海轻微偏高】深度 ${depth.toFixed(0)}m 处 DOC 达 ${conc.toFixed(2)} μM (高于深水基准上限 48 μM)`);
+      }
+    }
   }
 
   // Check CRM Recovery if available

@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Upload, FileText, Download, Trash2, CheckCircle, AlertTriangle,
-  Settings, ChevronLeft, ChevronRight, Check, Printer, FileSpreadsheet
+  Settings, ChevronLeft, ChevronRight, Check, Printer, FileSpreadsheet,
+  FolderOpen, Save, Sparkles
 } from 'lucide-react';
 import { parseRawTxt } from './utils/parser';
 import { selectBestSubset, fitCalibrationCurve, calculateMean, calculateStdev } from './utils/calc';
@@ -145,6 +146,7 @@ export default function App() {
   // File Upload Handling
   const rawFileInputRef = useRef<HTMLInputElement>(null);
   const coordFileInputRef = useRef<HTMLInputElement>(null);
+  const projectFileInputRef = useRef<HTMLInputElement>(null);
   const [isDragActiveRaw, setIsDragActiveRaw] = useState<boolean>(false);
   const [isDragActiveCoord, setIsDragActiveCoord] = useState<boolean>(false);
 
@@ -225,6 +227,13 @@ export default function App() {
   };
 
   const processRawFiles = async (fileList: File[]) => {
+    // Intercept project files (.oceanjson / .json)
+    const projectFile = fileList.find(f => f.name.endsWith('.oceanjson') || (f.name.endsWith('.json') && !f.name.endsWith('package.json')));
+    if (projectFile) {
+      handleImportProjectFile(projectFile);
+      return;
+    }
+
     // Sort incoming files by physical measurement date & batch priority
     const sortedFileList = [...fileList].sort((a, b) => getFileSortPriority(a.name) - getFileSortPriority(b.name));
 
@@ -306,6 +315,13 @@ export default function App() {
   };
 
   const processCoordFiles = async (fileList: File[]) => {
+    // Intercept project files (.oceanjson / .json)
+    const projectFile = fileList.find(f => f.name.endsWith('.oceanjson') || (f.name.endsWith('.json') && !f.name.endsWith('package.json')));
+    if (projectFile) {
+      handleImportProjectFile(projectFile);
+      return;
+    }
+
     const newFiles: { name: string; size: number }[] = [];
     let newCoords: ExcelSampleInfo[] = [];
 
@@ -433,6 +449,127 @@ export default function App() {
       'ocean_enableBlankCorrection', 'ocean_forceZeroIntercept'
     ];
     keys.forEach(k => localStorage.removeItem(k));
+  };
+
+  const loadProjectData = (data: any, autoStep: boolean = true) => {
+    if (!data || typeof data !== 'object') {
+      alert('无效的工程文件格式');
+      return;
+    }
+    if (data.files && Array.isArray(data.files)) setFiles(data.files);
+    if (data.rawInjections && Array.isArray(data.rawInjections)) setRawInjections(data.rawInjections);
+    if (data.stationCoords && Array.isArray(data.stationCoords)) setStationCoords(data.stationCoords);
+    if (data.hydroSamples && Array.isArray(data.hydroSamples)) setHydroSamples(data.hydroSamples);
+    if (data.hydroParameters && Array.isArray(data.hydroParameters)) setHydroParameters(data.hydroParameters);
+    if (data.hydroSheetNames && Array.isArray(data.hydroSheetNames)) setHydroSheetNames(data.hydroSheetNames);
+    if (data.hydroSelectedSheet) setHydroSelectedSheet(data.hydroSelectedSheet);
+
+    if (data.stdStockC !== undefined) setStdStockC(data.stdStockC);
+    if (data.stdDilutionFactor !== undefined) setStdDilutionFactor(data.stdDilutionFactor);
+    if (data.stdUsedC !== undefined) setStdUsedC(data.stdUsedC);
+    if (data.enabledStds) setEnabledStds(data.enabledStds);
+    if (data.customDilutions) setCustomDilutions(data.customDilutions);
+    if (data.excludedInjections) setExcludedInjections(data.excludedInjections);
+    if (data.rejectedSamples) setRejectedSamples(data.rejectedSamples);
+    if (data.customSampleNames) setCustomSampleNames(data.customSampleNames);
+    if (data.disabledCurves) setDisabledCurves(data.disabledCurves);
+    if (data.customStdUsedCs) setCustomStdUsedCs(data.customStdUsedCs);
+    if (data.sampleSortOrder) setSampleSortOrder(data.sampleSortOrder);
+    if (data.selectedCurveId) setSelectedCurveId(data.selectedCurveId);
+    if (data.emptyInjectionThreshold !== undefined) setEmptyInjectionThreshold(data.emptyInjectionThreshold);
+    if (data.dswMin !== undefined) setDswMin(data.dswMin);
+    if (data.dswMax !== undefined) setDswMax(data.dswMax);
+    if (data.dswTargetConc !== undefined) setDswTargetConc(data.dswTargetConc);
+    if (data.sswMin !== undefined) setSswMin(data.sswMin);
+    if (data.sswMax !== undefined) setSswMax(data.sswMax);
+    if (data.curveOffsets) setCurveOffsets(data.curveOffsets);
+    if (data.enableBlankCorrection !== undefined) setEnableBlankCorrection(data.enableBlankCorrection);
+    if (data.forceZeroIntercept !== undefined) setForceZeroIntercept(data.forceZeroIntercept);
+
+    if (autoStep) {
+      if (data.currentStep && data.currentStep >= 1 && data.currentStep <= 5) {
+        setCurrentStep(data.currentStep);
+      } else if (data.hydroSamples && data.hydroSamples.length > 0) {
+        setCurrentStep(4);
+      } else {
+        setCurrentStep(3);
+      }
+    }
+  };
+
+  const handleImportProjectFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const json = JSON.parse(text);
+        loadProjectData(json);
+        alert(`成功导入工程: ${file.name}！已载入 ${json.rawInjections?.length || 0} 行仪器数据、${json.stationCoords?.length || 0} 个站位坐标、${json.hydroSamples?.length || 0} 行水文数据。`);
+      } catch (err) {
+        console.error("Error importing project file:", err);
+        alert('解析工程文件失败，请确认文件格式是否正确。');
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  const loadDefault2026Project = async () => {
+    try {
+      const res = await fetch('/ocean_project_2026-08-17.oceanjson');
+      if (!res.ok) throw new Error('网络请求失败');
+      const json = await res.json();
+      loadProjectData(json);
+      alert('已成功载入 2026-08-17 完整工程数据！包含 5,262 针仪器原始注入数据、797 个站位样品及 1,708 条水文断面。');
+    } catch (err) {
+      console.error(err);
+      alert('载入预设工程失败，请点击“导入工程”手动选择 ocean_project_2026-08-17.oceanjson');
+    }
+  };
+
+  const exportProjectData = () => {
+    const project = {
+      version: "1.0",
+      exportDate: new Date().toISOString(),
+      currentStep,
+      files,
+      rawInjections,
+      stationCoords,
+      stdStockC,
+      stdDilutionFactor,
+      stdUsedC,
+      dilutionFactors,
+      enabledStds,
+      customDilutions,
+      excludedInjections,
+      rejectedSamples,
+      customSampleNames,
+      disabledCurves,
+      customStdUsedCs,
+      sampleSortOrder,
+      selectedCurveId,
+      emptyInjectionThreshold,
+      dswMin,
+      dswMax,
+      dswTargetConc,
+      sswMin,
+      sswMax,
+      curveOffsets,
+      hydroSamples,
+      hydroParameters,
+      hydroSheetNames,
+      hydroSelectedSheet,
+      enableBlankCorrection,
+      forceZeroIntercept
+    };
+
+    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = new Date().toISOString().split('T')[0];
+    a.download = `ocean_project_${dateStr}.oceanjson`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const removeFile = (fileName: string) => {
@@ -1407,8 +1544,64 @@ export default function App() {
   return (
     <div className="wizard-container">
 
-      {/* Wizard Header with Stepper Progress */}
+      {/* Wizard Header with Stepper Progress & Project Operations */}
       <div className="wizard-header">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', maxWidth: '1200px', margin: '0 auto 20px auto', paddingBottom: '14px', borderBottom: '1px solid rgba(255, 255, 255, 0.1)', flexWrap: 'wrap', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '26px' }}>🌊</span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 700, letterSpacing: '-0.3px', color: '#f8fafc' }}>
+                海洋溶解有机碳 (DOC) 数据处理与综合分析平台
+              </h2>
+              <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>
+                Ocean Carbon Platform · 原始色谱积分 · 批次曲线拟合 · 全流程质控 · 2D/3D剖面绘制
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="file"
+              ref={projectFileInputRef}
+              style={{ display: 'none' }}
+              accept=".oceanjson,.json"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleImportProjectFile(e.target.files[0]);
+                }
+              }}
+            />
+            <button
+              className="btn btn-secondary"
+              style={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#e2e8f0', padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}
+              onClick={() => projectFileInputRef.current?.click()}
+              title="导入保存的 .oceanjson 完整工程文件"
+            >
+              <FolderOpen size={14} className="text-sky-400" />
+              <span>导入工程 (.oceanjson)</span>
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#e2e8f0', padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px' }}
+              onClick={exportProjectData}
+              disabled={files.length === 0 && hydroSamples.length === 0}
+              title="导出当前所有数据、工作曲线、质控状态为 .oceanjson 格式"
+            >
+              <Save size={14} className="text-emerald-400" />
+              <span>导出工程</span>
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ padding: '6px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '5px', background: 'linear-gradient(135deg, #0284c7, #0369a1)', border: 'none', boxShadow: '0 2px 8px rgba(2, 132, 199, 0.4)' }}
+              onClick={loadDefault2026Project}
+              title="一键载入本地 ocean_project_2026-08-17.oceanjson 完整工程 (5,262 针 / 797 样品 / 1,708 条水文点)"
+            >
+              <Sparkles size={14} />
+              <span>载入 2026-08-17 工程</span>
+            </button>
+          </div>
+        </div>
+
         <div className="stepper">
           {/* Stepper background line progress */}
           <div
@@ -1427,8 +1620,8 @@ export default function App() {
                 className={`step-node ${isActive ? 'active' : ''} ${isCompleted ? 'completed' : ''}`}
                 onClick={() => {
                   // Only allow navigation to steps already unlocked
-                  if (files.length > 0 || stepNum === 1) {
-                    if (stepNum < 3 || calibrationCurve.slope > 0) {
+                  if (files.length > 0 || hydroSamples.length > 0 || stepNum === 1) {
+                    if (stepNum < 3 || calibrationCurve.slope > 0 || hydroSamples.length > 0) {
                       setCurrentStep(stepNum);
                     }
                   }
@@ -1454,6 +1647,42 @@ export default function App() {
               <div>
                 <h1 className="page-title">数据文件导入</h1>
                 <p className="page-subtitle">第一步：上传仪器导出的原始中文字符集 `.txt` 数据文件，以及带站位经纬度坐标的样品清单（`.xlsx`, `.xls`, `.csv`）</p>
+              </div>
+            </div>
+
+            {/* Quick Load 2026-08-17 Project Card */}
+            <div className="card" style={{ padding: '16px 20px', marginBottom: '20px', background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.04) 0%, rgba(14, 165, 233, 0.1) 100%)', border: '1px solid rgba(2, 132, 199, 0.25)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'linear-gradient(135deg, #0284c7, #0369a1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 4px 12px rgba(2, 132, 199, 0.25)' }}>
+                  <Sparkles size={22} />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#0f172a' }}>预置完整工程备份: ocean_project_2026-08-17.oceanjson</h4>
+                    <span className="badge badge-info" style={{ fontSize: '11px', padding: '2px 8px' }}>3.2 MB</span>
+                  </div>
+                  <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#475569' }}>
+                    包含 17 个文件、5,262 针仪器注入原始数据、797 个站位样品坐标、1,708 行多参数水文断面及已校准的工作曲线与质控配置。
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ padding: '8px 18px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 14px rgba(2, 132, 199, 0.3)' }}
+                  onClick={loadDefault2026Project}
+                >
+                  <Sparkles size={15} />
+                  <span>一键载入该工程数据</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '8px 16px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  onClick={() => projectFileInputRef.current?.click()}
+                >
+                  <FolderOpen size={15} />
+                  <span>选择本地 .oceanjson 文件</span>
+                </button>
               </div>
             </div>
 
@@ -3031,6 +3260,14 @@ export default function App() {
                 >
                   <FileSpreadsheet size={18} />
                   <span>导出 ODV 绘图专用 CSV 文件 (.csv)</span>
+                </button>
+                <button
+                  className="btn btn-secondary w-full justify-center py-3 text-base"
+                  style={{ backgroundColor: '#059669', color: '#ffffff', borderColor: '#059669' }}
+                  onClick={exportProjectData}
+                >
+                  <Save size={18} />
+                  <span>导出完整工程数据备份文件 (.oceanjson)</span>
                 </button>
               </div>
             </div>

@@ -37,6 +37,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.txt
 *.xlsx
 
-# Exclude large netCDF datasets
-data/*.nc
-*.nc
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary workspace saves
+*.oceanjson
+
+
