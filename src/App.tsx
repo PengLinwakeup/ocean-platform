@@ -15,7 +15,7 @@ import {
 import * as xlsx from 'xlsx';
 import OriginPlotter from './components/OriginPlotter';
 import QCDashboard from './components/QCDashboard';
-import { exportMultiSheetQCExcel, exportODVPlottingCSV, ColumnBatchExportData } from './utils/excelExporter';
+import { exportMultiSheetQCExcel, exportODVPlottingCSV, exportGeomarValidatedV2Excel, ColumnBatchExportData } from './utils/excelExporter';
 import { evaluateSampleQC, correctCrmIdentity } from './utils/qcEvaluator';
 
 const loadSavedState = <T,>(key: string, defaultValue: T): T => {
@@ -1363,6 +1363,130 @@ export default function App() {
     });
 
     await exportMultiSheetQCExcel(summarySamples, batchAnalysis, stationCoords, hydroSamples);
+  };
+
+  const exportToGeomarV2 = async () => {
+    const activeCurves = calibrationCurves
+      .filter(c => !disabledCurves[c.id])
+      .map(c => ({ id: c.id, name: c.name, fileName: c.fileName, slope: c.slope, intercept: c.intercept, rsq: c.rsq }));
+
+    const calculatedConcs = processedSamples.reduce((acc, s) => {
+      acc[s.id] = s.concentration;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const targetCrmConc = dswTargetConc;
+
+    const fileMap: Record<string, SampleGroup[]> = {};
+    processedSamples.forEach(g => {
+      if (!fileMap[g.fileName]) {
+        fileMap[g.fileName] = [];
+      }
+      fileMap[g.fileName].push(g);
+    });
+
+    const getFileSortPriority = (fileName: string): number => {
+      const activeFileNames = activeCurves.map(c => c.fileName);
+      const idx = activeFileNames.indexOf(fileName);
+      return idx >= 0 ? idx : 999;
+    };
+
+    const sortedFileEntries = Object.entries(fileMap).sort(([fileA], [fileB]) => getFileSortPriority(fileA) - getFileSortPriority(fileB));
+    const batchAnalysis: ColumnBatchExportData[] = [];
+
+    sortedFileEntries.forEach(([fileName, sampleList], fileIdx) => {
+      const fileColIdx = fileIdx + 1;
+      const matchingCurves = activeCurves.filter(c => c.fileName === fileName);
+
+      if (matchingCurves.length > 0) {
+        const isMultiCurveInFile = matchingCurves.length > 1;
+
+        matchingCurves.forEach(calib => {
+          const curveSamples = isMultiCurveInFile
+            ? sampleList.filter(s => (s as any).curveId === calib.id)
+            : sampleList;
+          const activeSampleList = curveSamples.length > 0 ? curveSamples : sampleList;
+
+          const validBlanks = activeSampleList.filter(s => {
+            if (!s.isBlank && !s.sampleName.toLowerCase().includes('blank') && !s.sampleName.toLowerCase().includes('mq')) return false;
+            const lowerId = s.sampleId.toLowerCase();
+            const lowerName = s.sampleName.toLowerCase();
+            if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash') || lowerName.includes('冲洗') || lowerName.includes('清洗')) return false;
+            return true;
+          });
+
+          let blankArea = 0;
+          let blankConcEquiv = 0;
+          if (validBlanks.length > 0) {
+            const areas = validBlanks.map(g => g.avArea).sort((a, b) => a - b);
+            const medianArea = areas.length % 2 === 0
+              ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
+              : areas[Math.floor(areas.length / 2)];
+
+            const filteredBlanks = validBlanks.filter(g => !(medianArea > 0 && g.avArea > Math.max(medianArea * 3.0, 0.3)));
+            const activeBlanks = filteredBlanks.length > 0 ? filteredBlanks : validBlanks;
+            blankArea = activeBlanks.reduce((sum, b) => sum + b.avArea, 0) / activeBlanks.length;
+            blankConcEquiv = calib.slope > 0 ? blankArea / calib.slope : 0;
+          }
+
+          let dswCrms = activeSampleList.filter(s => {
+            if ((s as any).isRejected) return false;
+            const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+            const corrected = correctCrmIdentity(s.sampleName, conc);
+            return corrected.actualType === 'DSW';
+          });
+
+          if (dswCrms.length <= 1) {
+            const fileDsws = sampleList.filter(s => {
+              if ((s as any).isRejected) return false;
+              const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+              const corrected = correctCrmIdentity(s.sampleName, conc);
+              return corrected.actualType === 'DSW';
+            });
+            if (fileDsws.length > dswCrms.length) {
+              dswCrms = fileDsws;
+            }
+          }
+
+          let crmAvgMeasured = 0;
+          let crmRecovery = 0;
+
+          if (dswCrms.length > 0) {
+            const crmConcs = dswCrms.map(c => calculatedConcs[c.id] ?? 0);
+            crmAvgMeasured = crmConcs.reduce((a, b) => a + b, 0) / dswCrms.length;
+            crmRecovery = targetCrmConc > 0 ? (crmAvgMeasured / targetCrmConc) * 100 : 0;
+          }
+
+          const evaluatedSamples = activeSampleList.map(s => {
+            const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
+            const evalRes = evaluateSampleQC(s.rsd, crmRecovery > 0 ? crmRecovery : undefined, calib.rsq);
+            return {
+              ...s,
+              calculatedConc: conc,
+              qcFlag: evalRes.flag
+            };
+          });
+
+          batchAnalysis.push({
+            curveId: calib.id,
+            curveName: calib.name,
+            fileName,
+            fileColIdx,
+            slope: calib.slope,
+            intercept: calib.intercept,
+            rsq: calib.rsq,
+            blankArea,
+            blankConcEquiv,
+            crmExpected: targetCrmConc,
+            crmMeasuredAvg: crmAvgMeasured,
+            crmRecovery,
+            samples: evaluatedSamples
+          });
+        });
+      }
+    });
+
+    await exportGeomarValidatedV2Excel(batchAnalysis, stationCoords, hydroSamples);
   };
 
   const exportToODVCSV = () => {
@@ -3249,9 +3373,17 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <button
+                  className="btn w-full justify-center py-3.5 text-base font-bold shadow-lg transition-all hover:scale-[1.01]"
+                  style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #ea580c 100%)', color: '#ffffff', border: 'none' }}
+                  onClick={exportToGeomarV2}
+                >
+                  <FileSpreadsheet size={19} />
+                  <span>⭐ 一键导出 GEOMAR Validated v2 质控 Master 报表 (.xlsx)</span>
+                </button>
                 <button className="btn btn-primary w-full justify-center py-3 text-base" onClick={exportToExcel}>
                   <Download size={18} />
-                  <span>一键下载 Excel 结构化处理报表 (.xlsx)</span>
+                  <span>经典多分表结构化 Excel 报表 (.xlsx)</span>
                 </button>
                 <button
                   className="btn btn-secondary w-full justify-center py-3 text-base"
