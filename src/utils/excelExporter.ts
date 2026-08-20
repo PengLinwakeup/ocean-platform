@@ -999,7 +999,37 @@ export async function exportGeomarValidatedV2Excel(
     const res = await fetch('/api/export-geomar-v2', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ batchCount: batchDetails.length })
+      body: JSON.stringify({
+        batches: batchDetails.map(b => ({
+          curveId: b.curveId,
+          curveName: b.curveName,
+          fileName: b.fileName,
+          fileColIdx: b.fileColIdx,
+          slope: b.slope,
+          intercept: b.intercept,
+          rsq: b.rsq,
+          blankArea: b.blankArea,
+          blankConcEquiv: b.blankConcEquiv,
+          crmExpected: b.crmExpected,
+          crmMeasuredAvg: b.crmMeasuredAvg,
+          crmRecovery: b.crmRecovery,
+          samples: b.samples.map(s => ({
+            sampleName: s.sampleName,
+            sampleId: s.sampleId,
+            station: s.station,
+            depth: s.depth,
+            injections: s.injections,
+            selectedInjections: s.selectedInjections,
+            selectedIndices: s.selectedInjections ? s.selectedInjections.map((sel, idx) => sel ? idx : -1).filter(idx => idx >= 0) : undefined,
+            avArea: s.avArea,
+            sdArea: s.sdArea,
+            rsd: s.rsd,
+            calculatedConc: s.calculatedConc,
+            isStd: s.isStd,
+            isBlank: s.isBlank
+          }))
+        }))
+      })
     });
     if (res.ok) {
       const blob = await res.blob();

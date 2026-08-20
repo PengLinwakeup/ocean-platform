@@ -15,26 +15,49 @@ export default defineConfig({
           if (req.method === 'POST') {
             try {
               const scriptPath = path.resolve(__dirname, 'run_geomar_qc_processor_20260820.py');
+              const jsonPath = path.resolve(__dirname, 'temp_geomar_v2_input.json');
               const outPath = path.resolve(__dirname, 'temp_geomar_v2_export.xlsx');
               
-              exec(`python "${scriptPath}" --output "${outPath}"`, (error) => {
-                if (error) {
-                  console.error('Python export error:', error);
-                  res.statusCode = 500;
-                  res.end(JSON.stringify({ error: error.message }));
-                  return;
+              let body = '';
+              req.on('data', chunk => {
+                body += chunk;
+              });
+              
+              req.on('end', () => {
+                let cmd = `python "${scriptPath}" --output "${outPath}"`;
+                if (body && body.trim().length > 0) {
+                  try {
+                    const parsed = JSON.parse(body);
+                    if (parsed && (parsed.batches || Array.isArray(parsed))) {
+                      fs.writeFileSync(jsonPath, JSON.stringify(parsed, null, 2), 'utf-8');
+                      cmd = `python "${scriptPath}" --json-input "${jsonPath}" --output "${outPath}"`;
+                    }
+                  } catch (e) {
+                    console.warn('Failed to parse JSON body for geomar v2 export:', e);
+                  }
                 }
                 
-                if (fs.existsSync(outPath)) {
-                  const data = fs.readFileSync(outPath);
-                  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-                  res.setHeader('Content-Disposition', 'attachment; filename="Ocean_DOC_MultiColumn_QC_Report_GEOMAR_Validated_v2.xlsx"');
-                  res.statusCode = 200;
-                  res.end(data);
-                } else {
-                  res.statusCode = 500;
-                  res.end(JSON.stringify({ error: 'Output file not generated' }));
-                }
+                exec(cmd, { maxBuffer: 1024 * 1024 * 32 }, (error, stdout, stderr) => {
+                  if (stdout) console.log('Python export stdout:', stdout);
+                  if (stderr) console.error('Python export stderr:', stderr);
+                  if (error) {
+                    console.error('Python export error:', error);
+                    res.statusCode = 500;
+                    res.end(JSON.stringify({ error: error.message }));
+                    return;
+                  }
+                  
+                  if (fs.existsSync(outPath)) {
+                    const data = fs.readFileSync(outPath);
+                    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                    res.setHeader('Content-Disposition', 'attachment; filename="Ocean_DOC_MultiColumn_QC_Report_GEOMAR_Validated_v2.xlsx"');
+                    res.statusCode = 200;
+                    res.end(data);
+                  } else {
+                    res.statusCode = 500;
+                    res.end(JSON.stringify({ error: 'Output file not generated' }));
+                  }
+                });
               });
             } catch (err: any) {
               res.statusCode = 500;

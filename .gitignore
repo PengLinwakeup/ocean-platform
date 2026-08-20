@@ -44,5 +44,6 @@ __pycache__/
 
 # Temporary workspace saves
 *.oceanjson
+temp_geomar_v2_*.json
 
 
