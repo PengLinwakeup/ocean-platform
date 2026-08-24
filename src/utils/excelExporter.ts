@@ -1026,7 +1026,10 @@ export async function exportGeomarValidatedV2Excel(
             rsd: s.rsd,
             calculatedConc: s.calculatedConc,
             isStd: s.isStd,
-            isBlank: s.isBlank
+            isBlank: s.isBlank,
+            isRejected: (s as any).isRejected,
+            curveId: (s as any).curveId,
+            qcFlag: (s as any).qcFlag
           }))
         }))
       })
@@ -1068,6 +1071,8 @@ export async function exportGeomarValidatedV2Excel(
   const fillGreen = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } } as const;
   const fillYellow = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } } as const;
   const fillRed = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } } as const;
+  const fillPurple = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3E8FF' } } as const;
+  const fillHelper = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } } as const;
 
   const borderThin = {
     top: { style: 'thin' as const, color: { argb: 'FFE2E8F0' } },
@@ -1111,15 +1116,48 @@ export async function exportGeomarValidatedV2Excel(
 
   const processedBatches: ProcessedBatchItem[] = [];
 
+  const fileBatchesMap: Record<string, ColumnBatchExportData[]> = {};
+  batchDetails.forEach(b => {
+    if (!fileBatchesMap[b.fileName]) fileBatchesMap[b.fileName] = [];
+    fileBatchesMap[b.fileName].push(b);
+  });
+
   batchDetails.forEach((batch, batchIdx) => {
     const colNum = batch.fileColIdx ?? (batchIdx + 1);
     const curveTag = batch.curveName ? `曲${batch.curveName}` : '';
     const rawName = batch.fileName.replace(/\.txt|\.csv/gi, '').slice(0, 18);
     const sheetName = `柱${colNum}${curveTag ? `_${curveTag}` : ''}_${rawName}`.slice(0, 31);
 
+    let activeSamples = batch.samples;
+    if (batch.curveId && activeSamples.some(s => (s as any).curveId)) {
+      const matched = activeSamples.filter(s => (s as any).curveId === batch.curveId);
+      if (matched.length > 0) activeSamples = matched;
+    } else {
+      const sameFileBatches = fileBatchesMap[batch.fileName] || [batch];
+      if (sameFileBatches.length > 1 && activeSamples.length > 0) {
+        const cPos = sameFileBatches.indexOf(batch);
+        const stdStarts: number[] = [];
+        let inStd = false;
+        activeSamples.forEach((sItem, sIdx) => {
+          const sName = (sItem.sampleName || '').toLowerCase();
+          const isS = sItem.isStd || sName.includes('std') || sName.includes('标准');
+          if (isS) {
+            if (!inStd) { stdStarts.push(sIdx); inStd = true; }
+          } else {
+            inStd = false;
+          }
+        });
+        if (stdStarts.length >= sameFileBatches.length && cPos >= 0) {
+          const sStart = cPos > 0 ? stdStarts[cPos] : 0;
+          const sEnd = (cPos + 1) < stdStarts.length ? stdStarts[cPos + 1] : activeSamples.length;
+          activeSamples = activeSamples.slice(sStart, sEnd);
+        }
+      }
+    }
+
     const rawSampleList: ProcessedBatchItem['samples'] = [];
 
-    batch.samples.forEach((s) => {
+    activeSamples.forEach((s) => {
       const rawAreas = (s.injections && s.injections.length > 0) ? s.injections : [s.avArea];
       while (rawAreas.length < 4) rawAreas.push(0);
 
@@ -1237,30 +1275,23 @@ export async function exportGeomarValidatedV2Excel(
       }
     });
 
-    let mqSlope = 0;
-    let mqIntercept = 0;
-    if (mqPoints.length >= 2) {
-      const n = mqPoints.length;
-      const sumX = mqPoints.reduce((sum, p) => sum + p.seq, 0);
-      const sumY = mqPoints.reduce((sum, p) => sum + p.area, 0);
-      const sumXY = mqPoints.reduce((sum, p) => sum + p.seq * p.area, 0);
-      const sumX2 = mqPoints.reduce((sum, p) => sum + p.seq * p.seq, 0);
-      const denom = n * sumX2 - sumX * sumX;
-      if (denom !== 0) {
-        mqSlope = (n * sumXY - sumX * sumY) / denom;
-        mqIntercept = (sumY - mqSlope * sumX) / n;
-      } else {
-        mqIntercept = sumY / n;
-      }
-    } else if (mqPoints.length === 1) {
-      mqIntercept = mqPoints[0].area;
-    }
+    const firstMq = mqPoints.length > 0 ? mqPoints[0] : null;
+    const lastMq = mqPoints.length > 0 ? mqPoints[mqPoints.length - 1] : null;
+    const mqSlope = (firstMq && lastMq && lastMq.seq > firstMq.seq) ? (lastMq.area - firstMq.area) / (lastMq.seq - firstMq.seq) : 0;
 
     let f2 = 0, f3 = 0, f4 = 0;
     const dswConcs: number[] = [];
 
     sampleItems.forEach(s => {
-      const dynBlank = s.categoryType === 'STD' ? 0 : Math.max(0, mqSlope * s.seqOrder + mqIntercept);
+      let dynBlank = 0;
+      if (s.categoryType !== 'STD') {
+        if (firstMq && lastMq && lastMq.seq > firstMq.seq) {
+          dynBlank = firstMq.area + (lastMq.area - firstMq.area) * (s.seqOrder - firstMq.seq) / (lastMq.seq - firstMq.seq);
+        } else if (firstMq) {
+          dynBlank = firstMq.area;
+        }
+      }
+      dynBlank = Math.max(0, dynBlank);
       s.dynamicBlankArea = dynBlank;
       const qcDoc = batch.slope > 0 ? Math.max(0, (s.cleanMean - dynBlank) / batch.slope) : 0;
       s.qcDynamicDoc = qcDoc;
@@ -1269,23 +1300,26 @@ export async function exportGeomarValidatedV2Excel(
         dswConcs.push(qcDoc);
       }
 
-      if (s.cleanRsd > 5.0) {
-        s.woceFlag = 4;
-        s.diagnosis = `High injection RSD (${s.cleanRsd.toFixed(1)}% > 5.0%)`;
-        s.status = '被丢弃 (Discarded)';
-      } else if (s.categoryType === 'SAMPLE' && s.depth !== null && s.depth >= 1000 && qcDoc < 36.0) {
-        s.woceFlag = 4;
-        s.diagnosis = `Deep sea DOC anomaly (${qcDoc.toFixed(1)} uM < 36 uM at ${s.depth.toFixed(0)}m)`;
-        s.status = '被丢弃 (Discarded)';
-      } else if (s.cleanRsd > 3.0) {
-        s.woceFlag = 3;
-        s.diagnosis = `Moderate injection RSD (${s.cleanRsd.toFixed(1)}%)`;
-        s.status = '保留 (Included)';
-      } else {
-        s.woceFlag = 2;
-        s.diagnosis = 'Acceptable (Good Quality)';
-        s.status = '保留 (Included)';
-      }
+      // Calculate absolute SD across injections for this sample item
+      const injVals = (s.rawAreas && s.rawAreas.length > 0) ? s.rawAreas.filter(v => typeof v === 'number' && v >= 0) : [s.cleanMean];
+      const meanInj = injVals.length > 0 ? injVals.reduce((a, b) => a + b, 0) / injVals.length : s.cleanMean;
+      const sdArea = injVals.length > 1 ? Math.sqrt(injVals.reduce((acc, a) => acc + Math.pow(a - meanInj, 2), 0) / (injVals.length - 1)) : 0;
+
+      const isMq = s.categoryType === 'MQ';
+      const evalRes = evaluateSampleQC(
+        s.cleanRsd,
+        undefined,
+        batch.rsq,
+        s.depth,
+        qcDoc,
+        s.categoryType === 'SAMPLE',
+        isMq,
+        sdArea
+      );
+
+      s.woceFlag = evalRes.flag;
+      s.diagnosis = evalRes.reasons.length > 0 ? evalRes.reasons.join('; ') : (s.woceFlag === 4 ? 'High injection RSD or Deep Sea Anomaly' : 'Acceptable (Good Quality)');
+      s.status = s.woceFlag === 4 ? '被丢弃 (Discarded)' : '保留 (Included)';
 
       if (s.categoryType === 'SAMPLE') {
         if (s.woceFlag === 2) f2++;
@@ -1338,17 +1372,24 @@ export async function exportGeomarValidatedV2Excel(
   const totalSeq = processedBatches.length;
   const totalInj = processedBatches.reduce((sum, b) => sum + b.samples.length * 4, 0);
   const allFieldSamples = processedBatches.flatMap(b => b.samples.filter(s => s.categoryType === 'SAMPLE'));
-  const totalSamples = allFieldSamples.length;
+  const totalRealSamples = allFieldSamples.length;
   const totalRetained = allFieldSamples.filter(s => s.woceFlag === 2 || s.woceFlag === 3).length;
   const totalBad = allFieldSamples.filter(s => s.woceFlag === 4).length;
-  const pctRetained = totalSamples > 0 ? (totalRetained / totalSamples) * 100 : 0;
-  const pctBad = totalSamples > 0 ? (totalBad / totalSamples) * 100 : 0;
+  
+  // Percentage calculated relative to REAL SEAWATER SAMPLES ONLY (e.g. 1040 + 36 = 1076, sum = 100%)
+  const pctRetainedOfReal = totalRealSamples > 0 ? (totalRetained / totalRealSamples) * 100 : 0;
+  const pctBadOfReal = totalRealSamples > 0 ? (totalBad / totalRealSamples) * 100 : 0;
 
-  const cards = [
+  const totalAllRows = processedBatches.reduce((sum, b) => sum + b.samples.length, 0);
+  const totalQcBlanksAndStds = totalAllRows - totalRealSamples;
+  const pctQcBlanks = totalAllRows > 0 ? (totalQcBlanksAndStds / totalAllRows) * 100 : 0;
+
+  const cards: { title: string; val: string; rangeT: string; rangeV: string; link?: string }[] = [
     { title: 'TOTAL SEQUENCES (RUNS)', val: `${totalSeq}`, rangeT: 'A4:B4', rangeV: 'A5:B5' },
-    { title: 'TOTAL INJECTIONS EVALUATED', val: `${totalInj}`, rangeT: 'C4:D4', rangeV: 'C5:D5' },
-    { title: 'ODV 保留样品 (FLAG 2 & 3)', val: `${totalRetained} (${pctRetained.toFixed(1)}%)`, rangeT: 'E4:F4', rangeV: 'E5:F5' },
-    { title: '被丢弃/剔除样品 (FLAG 4 BAD)', val: `${totalBad} (${pctBad.toFixed(1)}%)`, rangeT: 'G4:H4', rangeV: 'G5:H5' }
+    { title: 'TOTAL INJECTIONS EVALUATED', val: `${totalInj} (${totalAllRows} 瓶)`, rangeT: 'C4:D4', rangeV: 'C5:D5' },
+    { title: 'ODV 保留海水水样 (FLAG 2 & 3)', val: `${totalRetained} / ${totalRealSamples} (${pctRetainedOfReal.toFixed(1)}%)`, rangeT: 'E4:F4', rangeV: 'E5:F5', link: "#'ODV_Clean_Samples_Included'!A1" },
+    { title: '被剔除海水水样 (FLAG 4 BAD)', val: `${totalBad} / ${totalRealSamples} (${pctBadOfReal.toFixed(1)}%)`, rangeT: 'G4:H4', rangeV: 'G5:H5', link: "#'ODV_Discarded_Samples_Flag4'!A1" },
+    { title: '质控空白与参标 (MQ/CLEAN/DSW/STD)', val: `${totalQcBlanksAndStds} 瓶 (占全序列 ${pctQcBlanks.toFixed(1)}%)`, rangeT: 'I4:K4', rangeV: 'I5:K5' }
   ];
 
   cards.forEach(c => {
@@ -1360,8 +1401,17 @@ export async function exportGeomarValidatedV2Excel(
     cT.font = fontBoldDark;
     cT.alignment = { horizontal: 'center', vertical: 'middle' };
     cT.fill = fillCard;
-    cV.value = c.val;
-    cV.font = fontTimesBold;
+    if (c.link) {
+      cV.value = {
+        text: c.val,
+        hyperlink: c.link,
+        tooltip: '点击可直接跳转至该部分数据明细工作表'
+      };
+      cV.font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: 'FF1D4ED8' }, underline: true };
+    } else {
+      cV.value = c.val;
+      cV.font = fontTimesBold;
+    }
     cV.alignment = { horizontal: 'center', vertical: 'middle' };
     cV.fill = fillCard;
   });
@@ -1507,16 +1557,22 @@ export async function exportGeomarValidatedV2Excel(
         cell.alignment = { horizontal: 'right', vertical: 'middle' };
       }
 
+      const isPurple = (s as any).isAutoSmoothed || (s.woceFlag === 2 && (s.categoryType === 'MQ' || s.categoryType === 'CLEAN' || (s.sampleName || '').toUpperCase().includes('MQ')) && (s.diagnosis.includes('AI') || s.diagnosis.includes('平滑') || s.diagnosis.includes('Smoothed')));
       if (cIdx === 1) {
         if (s.woceFlag === 4) {
           cell.fill = fillRed;
           cell.font = { name: '微软雅黑', size: 9.5, bold: true, color: { argb: 'FF991B1B' } };
+        } else if (isPurple) {
+          cell.fill = fillPurple;
+          cell.font = { name: '微软雅黑', size: 9.5, bold: true, color: { argb: 'FF6B21A8' } };
         } else {
           cell.fill = fillGreen;
           cell.font = { name: '微软雅黑', size: 9.5, color: { argb: 'FF166534' } };
         }
       } else if (cIdx === 12) {
-        cell.fill = s.woceFlag === 4 ? fillRed : (s.woceFlag === 3 ? fillYellow : fillGreen);
+        cell.fill = s.woceFlag === 4 ? fillRed : (s.woceFlag === 3 ? fillYellow : (isPurple ? fillPurple : fillGreen));
+      } else if (isPurple && (cIdx === 2 || cIdx === 4 || cIdx === 5 || cIdx === 13)) {
+        cell.fill = fillPurple;
       } else if (!isEven) {
         cell.fill = fillZebra;
       }
@@ -1595,8 +1651,11 @@ export async function exportGeomarValidatedV2Excel(
         cell.alignment = { horizontal: 'right', vertical: 'middle' };
       }
 
+      const isPurple = (s as any).isAutoSmoothed || (s.woceFlag === 2 && (s.categoryType === 'MQ' || s.categoryType === 'CLEAN' || (s.sampleName || '').toUpperCase().includes('MQ')) && (s.diagnosis.includes('AI') || s.diagnosis.includes('平滑') || s.diagnosis.includes('Smoothed')));
       if (cIdx === 11) {
-        cell.fill = s.woceFlag === 3 ? fillYellow : fillGreen;
+        cell.fill = isPurple ? fillPurple : (s.woceFlag === 3 ? fillYellow : fillGreen);
+      } else if (isPurple && (cIdx === 1 || cIdx === 2 || cIdx === 3 || cIdx === 12)) {
+        cell.fill = fillPurple;
       } else if (!isEven) {
         cell.fill = fillZebra;
       }
@@ -1604,6 +1663,87 @@ export async function exportGeomarValidatedV2Excel(
   });
 
   wsClean.columns.forEach(col => {
+    let maxLen = 11;
+    col.eachCell?.({ includeEmpty: false }, cell => {
+      const len = String(cell.value || '').length;
+      if (len > maxLen) maxLen = len;
+    });
+    col.width = Math.min(maxLen + 3, 35);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 3.5 Sheet: ODV_Discarded_Samples_Flag4
+  // ---------------------------------------------------------------------------
+  const wsDiscarded = workbook.addWorksheet('ODV_Discarded_Samples_Flag4');
+  wsDiscarded.views = [{ showGridLines: true }];
+
+  wsDiscarded.mergeCells('A1:L1');
+  const discTitle = wsDiscarded.getCell('A1');
+  discTitle.value = 'ODV 质控被剔除/异常数据表 (Discarded Samples Flag 4 Master)';
+  discTitle.font = fontTitle;
+  wsDiscarded.getRow(1).height = 28;
+
+  wsDiscarded.mergeCells('A2:L2');
+  const discSubtitle = wsDiscarded.getCell('A2');
+  discSubtitle.value = "【核心透视】包含所有被隔离的 Flag 4 弃用样品 | 附带完整剔除原因诊断 (RSD > 5% 或深海浓度异常)";
+  discSubtitle.font = fontSubtitle;
+  wsDiscarded.getRow(2).height = 18;
+
+  const headersDiscarded = [
+    'Sequence Run', 'Station', 'Sample ID', 'Sample Type', 'Depth [m]',
+    'Raw DOC (μmol/L)', 'Dynamic MQ Area', 'Clean Mean Area', 'Clean RSD (%)',
+    'QC Dynamic DOC (μmol/L)', 'WOCE Quality Flag', '被丢弃 / 质控原因诊断 (Diagnosis Comment)'
+  ];
+  const rowDiscH = wsDiscarded.addRow(headersDiscarded);
+  rowDiscH.height = 26;
+  rowDiscH.eachCell(cell => {
+    cell.font = fontHeader;
+    cell.fill = fillNavy;
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = borderThin;
+  });
+
+  const discardedEntries = allFieldEntries.filter(e => e.sample.woceFlag === 4);
+  discardedEntries.forEach((entry, idx) => {
+    const s = entry.sample;
+    const row = wsDiscarded.addRow([
+      entry.seqName,
+      s.station,
+      s.sampleId,
+      s.categoryType,
+      s.depth !== null ? s.depth : '-',
+      safeNum(Number(s.rawDoc.toFixed(2))),
+      safeNum(Number(s.dynamicBlankArea.toFixed(4))),
+      safeNum(Number(s.cleanMean.toFixed(4))),
+      safeNum(Number(s.cleanRsd.toFixed(2))),
+      safeNum(Number(s.qcDynamicDoc.toFixed(2))),
+      s.woceFlag,
+      s.diagnosis
+    ]);
+    row.height = 20;
+    const isEven = idx % 2 === 0;
+
+    row.eachCell((cell, cIdx) => {
+      cell.border = borderThin;
+      cell.font = (cIdx === 1 || cIdx === 2 || cIdx === 3 || cIdx === 4 || cIdx === 12) ? fontRegular : fontTimes;
+      if (cIdx === 2 || cIdx === 4 || cIdx === 11) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cIdx === 1 || cIdx === 3 || cIdx === 12) {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      }
+
+      if (cIdx === 11) {
+        cell.fill = fillRed;
+        cell.font = { name: '微软雅黑', size: 9.5, bold: true, color: { argb: 'FF991B1B' } };
+      } else if (!isEven) {
+        cell.fill = fillZebra;
+      }
+    });
+  });
+
+  wsDiscarded.columns.forEach(col => {
     let maxLen = 11;
     col.eachCell?.({ includeEmpty: false }, cell => {
       const len = String(cell.value || '').length;
@@ -1663,6 +1803,26 @@ export async function exportGeomarValidatedV2Excel(
     });
     currentMasterRow++;
 
+    const startDataRow = currentMasterRow;
+    const mqSampleRows = b.samples
+      .map((s, sIdx) => ({ s, rNum: startDataRow + sIdx }))
+      .filter(item => item.s.categoryType === 'MQ');
+    const firstMqRow = mqSampleRows.length > 0 ? mqSampleRows[0].rNum : null;
+    const lastMqRow = mqSampleRows.length > 0 ? mqSampleRows[mqSampleRows.length - 1].rNum : null;
+
+    let mqRowPtr = startDataRow;
+    let dswRowPtr = startDataRow;
+
+    // Helper Headers for Side Columns T-W
+    const cellT = wsMaster.getCell(currentMasterRow - 1, 20);
+    cellT.value = 'MQ Order'; cellT.font = fontBoldDark; cellT.fill = fillHelper; cellT.alignment = { horizontal: 'center', vertical: 'middle' }; cellT.border = borderThin;
+    const cellU = wsMaster.getCell(currentMasterRow - 1, 21);
+    cellU.value = 'MQ DOC'; cellU.font = fontBoldDark; cellU.fill = fillHelper; cellU.alignment = { horizontal: 'center', vertical: 'middle' }; cellU.border = borderThin;
+    const cellV = wsMaster.getCell(currentMasterRow - 1, 22);
+    cellV.value = 'DSW Order'; cellV.font = fontBoldDark; cellV.fill = fillHelper; cellV.alignment = { horizontal: 'center', vertical: 'middle' }; cellV.border = borderThin;
+    const cellW = wsMaster.getCell(currentMasterRow - 1, 23);
+    cellW.value = 'DSW DOC'; cellW.font = fontBoldDark; cellW.fill = fillHelper; cellW.alignment = { horizontal: 'center', vertical: 'middle' }; cellW.border = borderThin;
+
     b.samples.forEach((s, sIdx) => {
       const rNum = currentMasterRow;
       const colLetters = s.selectedIndices.map(idx => String.fromCharCode(70 + idx)); // 70 = 'F'
@@ -1673,6 +1833,18 @@ export async function exportGeomarValidatedV2Excel(
         ? `STDEV(${colLetters.map(cl => `${cl}${rNum}`).join(',')})/J${rNum}*100`
         : '0';
       const qcFormula = `IF(${b.slope}>0, MAX(0, (J${rNum} - M${rNum}) / ${b.slope}), 0)`;
+
+      let dynBlankVal: any = safeNum(Number(s.dynamicBlankArea.toFixed(4)));
+      if (s.categoryType !== 'STD') {
+        if (firstMqRow && lastMqRow && lastMqRow > firstMqRow) {
+          dynBlankVal = {
+            formula: `IF(A${lastMqRow}>A${firstMqRow}, J${firstMqRow} + (J${lastMqRow} - J${firstMqRow}) * (A${rNum} - A${firstMqRow}) / (A${lastMqRow} - A${firstMqRow}), J${firstMqRow})`,
+            result: safeNum(Number(s.dynamicBlankArea.toFixed(4)))
+          };
+        } else if (firstMqRow) {
+          dynBlankVal = { formula: `J${firstMqRow}`, result: safeNum(Number(s.dynamicBlankArea.toFixed(4))) };
+        }
+      }
 
       const row = wsMaster.addRow([
         s.seqOrder,
@@ -1687,7 +1859,7 @@ export async function exportGeomarValidatedV2Excel(
         { formula: avgFormula, result: safeNum(Number(s.cleanMean.toFixed(4))) },
         { formula: stdevFormula, result: safeNum(Number(s.cleanRsd.toFixed(2))) },
         safeNum(Number(s.rawDoc.toFixed(2))),
-        safeNum(Number(s.dynamicBlankArea.toFixed(4))),
+        dynBlankVal,
         { formula: qcFormula, result: safeNum(Number(s.qcDynamicDoc.toFixed(2))) },
         s.woceFlag,
         s.diagnosis
@@ -1706,12 +1878,37 @@ export async function exportGeomarValidatedV2Excel(
           cell.alignment = { horizontal: 'right', vertical: 'middle' };
         }
 
+        const isPurple = (s as any).isAutoSmoothed || (s.woceFlag === 2 && s.categoryType === 'MQ' && (s.diagnosis.includes('可用空白') || s.diagnosis.includes('平滑') || s.diagnosis.includes('突刺')));
         if (cIdx === 15) {
-          cell.fill = s.woceFlag === 4 ? fillRed : (s.woceFlag === 3 ? fillYellow : fillGreen);
+          cell.fill = isPurple ? fillPurple : (s.woceFlag === 4 ? fillRed : (s.woceFlag === 3 ? fillYellow : fillGreen));
+        } else if (isPurple && (cIdx === 1 || cIdx === 3)) {
+          cell.fill = fillPurple;
         } else if (!isEven) {
           cell.fill = fillZebra;
         }
       });
+
+      // Write Side Helper Columns T-W for MQ & DSW live scatter charts
+      if (s.categoryType === 'MQ') {
+        const cT = wsMaster.getCell(mqRowPtr, 20);
+        cT.value = { formula: `A${rNum}`, result: s.seqOrder };
+        cT.alignment = { horizontal: 'center', vertical: 'middle' }; cT.border = borderThin; cT.font = fontTimes;
+        const cU = wsMaster.getCell(mqRowPtr, 21);
+        cU.value = { formula: `N${rNum}`, result: safeNum(Number(s.qcDynamicDoc.toFixed(2))) };
+        cU.alignment = { horizontal: 'right', vertical: 'middle' }; cU.border = borderThin; cU.font = fontTimes;
+        mqRowPtr++;
+      }
+
+      if (s.categoryType === 'DSW') {
+        const cV = wsMaster.getCell(dswRowPtr, 22);
+        cV.value = { formula: `A${rNum}`, result: s.seqOrder };
+        cV.alignment = { horizontal: 'center', vertical: 'middle' }; cV.border = borderThin; cV.font = fontTimes;
+        const cW = wsMaster.getCell(dswRowPtr, 23);
+        cW.value = { formula: `N${rNum}`, result: safeNum(Number(s.qcDynamicDoc.toFixed(2))) };
+        cW.alignment = { horizontal: 'right', vertical: 'middle' }; cW.border = borderThin; cW.font = fontTimes;
+        dswRowPtr++;
+      }
+
       currentMasterRow++;
     });
 

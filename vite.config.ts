@@ -23,6 +23,15 @@ export default defineConfig({
                 body += chunk;
               });
               
+              // Remove old temp output files so we never serve a stale cached export
+              if (fs.existsSync(outPath)) {
+                try { fs.unlinkSync(outPath); } catch (e) {}
+              }
+              const altOutPath = outPath.replace('.xlsx', '_latest.xlsx');
+              if (fs.existsSync(altOutPath)) {
+                try { fs.unlinkSync(altOutPath); } catch (e) {}
+              }
+
               req.on('end', () => {
                 let cmd = `python "${scriptPath}" --output "${outPath}"`;
                 if (body && body.trim().length > 0) {
@@ -47,8 +56,9 @@ export default defineConfig({
                     return;
                   }
                   
-                  if (fs.existsSync(outPath)) {
-                    const data = fs.readFileSync(outPath);
+                  const targetFile = fs.existsSync(outPath) ? outPath : (fs.existsSync(altOutPath) ? altOutPath : null);
+                  if (targetFile) {
+                    const data = fs.readFileSync(targetFile);
                     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
                     res.setHeader('Content-Disposition', 'attachment; filename="Ocean_DOC_MultiColumn_QC_Report_GEOMAR_Validated_v2.xlsx"');
                     res.statusCode = 200;

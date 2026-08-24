@@ -33,6 +33,9 @@ interface QCDashboardProps {
   onTargetCrmConcChange?: (val: number) => void;
   stationCoords?: ExcelSampleInfo[];
   hydroSamples?: any[];
+  customFlags?: Record<string, QCFlagLevel>;
+  onCustomFlagChange?: (sampleId: string, flag: QCFlagLevel) => void;
+  onBatchSetFlags?: (sampleIds: string[], flag: QCFlagLevel) => void;
 }
 
 export default function QCDashboard({
@@ -44,13 +47,44 @@ export default function QCDashboard({
   targetCrmConc: propTargetCrmConc,
   onTargetCrmConcChange,
   stationCoords = [],
-  hydroSamples = []
+  hydroSamples = [],
+  customFlags: propCustomFlags,
+  onCustomFlagChange,
+  onBatchSetFlags
 }: QCDashboardProps) {
   const [selectedFlagFilter, setSelectedFlagFilter] = useState<number | 'ALL' | 'RETAINED' | 'DISCARDED'>('ALL');
+  const [sampleTypeFilter, setSampleTypeFilter] = useState<'ALL' | 'FIELD' | 'MQ' | 'CRM'>('ALL');
   const [sampleSearchTerm, setSampleSearchTerm] = useState('');
   const [tablePage, setTablePage] = useState(1);
   const pageSize = 50;
   const [localTargetCrmConc, setLocalTargetCrmConc] = useState<number>(dswTargetConc);
+  const [localCustomFlags, setLocalCustomFlags] = useState<Record<string, QCFlagLevel>>({});
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+
+  const customFlags = propCustomFlags !== undefined ? propCustomFlags : localCustomFlags;
+
+  const handleFlagOverride = (sampleId: string, flag: QCFlagLevel) => {
+    if (onCustomFlagChange) {
+      onCustomFlagChange(sampleId, flag);
+    } else {
+      setLocalCustomFlags(prev => ({ ...prev, [sampleId]: flag }));
+    }
+  };
+
+  const handleBatchSetFlags = (flag: QCFlagLevel) => {
+    if (selectedRowIds.size === 0) return;
+    const ids = Array.from(selectedRowIds);
+    if (onBatchSetFlags) {
+      onBatchSetFlags(ids, flag);
+    } else {
+      setLocalCustomFlags(prev => {
+        const next = { ...prev };
+        ids.forEach(id => { next[id] = flag; });
+        return next;
+      });
+    }
+    setSelectedRowIds(new Set());
+  };
 
   const targetCrmConc = propTargetCrmConc !== undefined ? propTargetCrmConc : localTargetCrmConc;
   const handleTargetCrmConcChange = (val: number) => {
@@ -100,53 +134,24 @@ export default function QCDashboard({
 
       if (matchingCurves.length > 0) {
         const isMultiCurveInFile = matchingCurves.length > 1;
-
         matchingCurves.forEach(calib => {
-          // Filter samples that strictly belong to THIS specific calibration curve (if multi-curve file)
           const curveSamples = isMultiCurveInFile
             ? sampleList.filter(s => (s as any).curveId === calib.id)
             : sampleList;
           const activeSampleList = curveSamples.length > 0 ? curveSamples : sampleList;
+          const blanks = activeSampleList.filter(s => s.isBlank || s.sampleName.toLowerCase().includes('blank') || s.sampleName.toLowerCase().includes('mq'));
+          const blankArea = blanks.length > 0 ? blanks.reduce((sum, b) => sum + b.avArea, 0) / blanks.length : 0;
+          const blankConcEquiv = calib.slope > 0 ? (blankArea - calib.intercept) / calib.slope : 0;
 
-          // Find MQ Blanks for this curve segment (excluding cleaning/wash and extreme carryover outliers)
-          const validBlanks = activeSampleList.filter(s => {
-            if (!s.isBlank && !s.sampleName.toLowerCase().includes('blank') && !s.sampleName.toLowerCase().includes('mq')) return false;
-            const lowerId = s.sampleId.toLowerCase();
-            const lowerName = s.sampleName.toLowerCase();
-            if (lowerId.includes('clean') || lowerId.includes('flush') || lowerId.includes('wash') || lowerName.includes('clean') || lowerName.includes('flush') || lowerName.includes('wash') || lowerName.includes('清洗') || lowerName.includes('冲洗')) return false;
-            return true;
-          });
-
-          let blankArea = 0;
-          let blankConcEquiv = 0;
-          if (validBlanks.length > 0) {
-            const areas = validBlanks.map(g => g.avArea).sort((a, b) => a - b);
-            const medianArea = areas.length % 2 === 0
-              ? (areas[areas.length / 2 - 1] + areas[areas.length / 2]) / 2
-              : areas[Math.floor(areas.length / 2)];
-
-            const filteredBlanks = validBlanks.filter(g => !(medianArea > 0 && g.avArea > Math.max(medianArea * 3.0, 0.3)));
-            const activeBlanks = filteredBlanks.length > 0 ? filteredBlanks : validBlanks;
-            blankArea = activeBlanks.reduce((sum, b) => sum + b.avArea, 0) / activeBlanks.length;
-            blankConcEquiv = calib.slope > 0 ? blankArea / calib.slope : 0;
-          }
-
-          // Find DSW CRMs for this curve segment
-          let dswCrms = activeSampleList.filter(s => {
+          const fileDsws = activeSampleList.filter(s => {
             if ((s as any).isRejected) return false;
             const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
             const corrected = correctCrmIdentity(s.sampleName, conc);
             return corrected.actualType === 'DSW';
           });
 
-          // Fallback: If 0 or 1 DSW CRM in this curve segment, fallback to search across the ENTIRE physical column (sampleList)
-          if (dswCrms.length <= 1) {
-            const fileDsws = sampleList.filter(s => {
-              if ((s as any).isRejected) return false;
-              const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
-              const corrected = correctCrmIdentity(s.sampleName, conc);
-              return corrected.actualType === 'DSW';
-            });
+          let dswCrms = fileDsws;
+          if (dswCrms.length === 0) {
             if (fileDsws.length > dswCrms.length) {
               dswCrms = fileDsws;
             }
@@ -163,12 +168,33 @@ export default function QCDashboard({
 
           const evaluatedSamples = activeSampleList.map(s => {
             const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
-            const evalRes = evaluateSampleQC(s.rsd, crmRecovery > 0 ? crmRecovery : undefined, calib.rsq);
+            const lowerName = (s.sampleName || '').toLowerCase();
+            const lowerId = (s.id || '').toLowerCase();
+            const isMq = s.isBlank || lowerName.includes('blank') || lowerName.includes('mq') || lowerId.includes('blank') || lowerId.includes('mq');
+            
+            // Calculate absolute SD across injections
+            const activeInjs = (s.injections || []).map(i => typeof i === 'number' ? i : (i as any).area ?? 0);
+            const meanArea = activeInjs.length > 0 ? activeInjs.reduce((a, b) => a + b, 0) / activeInjs.length : s.avArea;
+            const sdArea = activeInjs.length > 1 ? Math.sqrt(activeInjs.reduce((acc, a) => acc + Math.pow(a - meanArea, 2), 0) / (activeInjs.length - 1)) : 0;
+
+            const autoEval = evaluateSampleQC(
+              s.rsd,
+              crmRecovery > 0 ? crmRecovery : undefined,
+              calib.rsq,
+              (s as any).depth,
+              conc,
+              !isMq && !s.isStd,
+              isMq,
+              sdArea
+            );
+
+            const finalFlag = customFlags[s.id] !== undefined ? customFlags[s.id] : autoEval.flag;
             return {
               ...s,
               calculatedConc: conc,
-              qcFlag: evalRes.flag
-            };
+              qcFlag: finalFlag,
+              isCustomOverridden: customFlags[s.id] !== undefined
+            } as any;
           });
 
           result.push({
@@ -176,7 +202,7 @@ export default function QCDashboard({
             curveName: calib.name,
             fileName,
             fileColIdx,
-            isMultiCurveInFile,
+            isMultiCurveInFile: true,
             slope: calib.slope,
             intercept: calib.intercept,
             rsq: calib.rsq,
@@ -212,12 +238,32 @@ export default function QCDashboard({
 
         const evaluatedSamples = sampleList.map(s => {
           const conc = calculatedConcs[s.id] ?? (calib.slope > 0 ? (s.avArea - calib.intercept) / calib.slope : 0);
-          const evalRes = evaluateSampleQC(s.rsd, crmRecovery > 0 ? crmRecovery : undefined, calib.rsq);
+          const lowerName = (s.sampleName || '').toLowerCase();
+          const lowerId = (s.id || '').toLowerCase();
+          const isMq = s.isBlank || lowerName.includes('blank') || lowerName.includes('mq') || lowerId.includes('blank') || lowerId.includes('mq');
+
+          const activeInjs = (s.injections || []).map(i => typeof i === 'number' ? i : (i as any).area ?? 0);
+          const meanArea = activeInjs.length > 0 ? activeInjs.reduce((a, b) => a + b, 0) / activeInjs.length : s.avArea;
+          const sdArea = activeInjs.length > 1 ? Math.sqrt(activeInjs.reduce((acc, a) => acc + Math.pow(a - meanArea, 2), 0) / (activeInjs.length - 1)) : 0;
+
+          const autoEval = evaluateSampleQC(
+            s.rsd,
+            crmRecovery > 0 ? crmRecovery : undefined,
+            calib.rsq,
+            (s as any).depth,
+            conc,
+            !isMq && !s.isStd,
+            isMq,
+            sdArea
+          );
+
+          const finalFlag = customFlags[s.id] !== undefined ? customFlags[s.id] : autoEval.flag;
           return {
             ...s,
             calculatedConc: conc,
-            qcFlag: evalRes.flag
-          };
+            qcFlag: finalFlag,
+            isCustomOverridden: customFlags[s.id] !== undefined
+          } as any;
         });
 
         result.push({
@@ -240,7 +286,7 @@ export default function QCDashboard({
     });
 
     return result;
-  }, [groups, calibrationMap, calibrationCurvesList, calculatedConcs, targetCrmConc]);
+  }, [groups, calibrationMap, calibrationCurvesList, calculatedConcs, targetCrmConc, customFlags]);
 
   // Overall Samples with QC Flags
   const allEvaluatedSamples = useMemo(() => {
@@ -450,22 +496,23 @@ export default function QCDashboard({
         const rsd = s.rsd || 0;
         const depth = s.depth !== undefined && s.depth !== null ? s.depth : null;
 
-        let flag = 2;
-        let diagnosis = '良好合格 (Acceptable Good Quality)';
-        let status = '保留 (Included)';
+        const activeInjs = (s.injections || []).map(i => typeof i === 'number' ? i : (i as any).area ?? 0);
+        const meanArea = activeInjs.length > 0 ? activeInjs.reduce((a, b) => a + b, 0) / activeInjs.length : s.avArea || 0;
+        const sdArea = activeInjs.length > 1 ? Math.sqrt(activeInjs.reduce((acc, a) => acc + Math.pow(a - meanArea, 2), 0) / (activeInjs.length - 1)) : 0;
 
-        if (rsd > 5.0) {
-          flag = 4;
-          diagnosis = `平行性偏差过大 (Clean RSD = ${rsd.toFixed(1)}% > 5.0%)`;
-          status = '被丢弃 (Discarded)';
-        } else if (depth !== null && depth >= 1000 && conc < 36.0) {
-          flag = 4;
-          diagnosis = `深海浓度异常偏低 (DOC = ${conc.toFixed(1)} < 36.0 μM at ${depth}m)`;
-          status = '被丢弃 (Discarded)';
-        } else if (rsd > 3.0) {
-          flag = 3;
-          diagnosis = `轻微变异漂移 (Clean RSD = ${rsd.toFixed(1)}%)`;
-          status = '保留 (Included)';
+        let flag: number;
+        let diagnosis: string;
+        let status: string;
+
+        if (customFlags[s.id] !== undefined) {
+          flag = customFlags[s.id];
+          diagnosis = `[人工指定: Flag ${flag}]`;
+          status = flag === 4 ? '被丢弃 (Discarded)' : '保留 (Included)';
+        } else {
+          const evalRes = evaluateSampleQC(rsd, undefined, b.rsq, depth, conc, true, false, sdArea);
+          flag = evalRes.flag;
+          diagnosis = evalRes.reasons.length > 0 ? evalRes.reasons.join('; ') : (flag === 4 ? '已被判定为弃用' : '良好合格 (Acceptable Good Quality)');
+          status = flag === 4 ? '被丢弃 (Discarded)' : '保留 (Included)';
         }
 
         const rawInjs = (s.injections && s.injections.length > 0) ? s.injections : [s.avArea || 0];
@@ -572,65 +619,78 @@ export default function QCDashboard({
       </div>
 
       {/* Top Interactive Retention KPI Badges */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div
-          onClick={() => {
-            setSelectedFlagFilter(selectedFlagFilter === 'RETAINED' ? 'ALL' : 'RETAINED');
-            setTablePage(1);
-            scrollToTable();
-          }}
-          className={`cursor-pointer p-4 rounded-xl border transition-all flex items-center justify-between ${
-            selectedFlagFilter === 'RETAINED'
-              ? 'bg-emerald-950/80 border-emerald-400 ring-2 ring-emerald-500/50 shadow-lg shadow-emerald-950/50'
-              : 'bg-slate-800/60 border-slate-700 hover:border-emerald-500/60'
-          }`}
-        >
-          <div>
-            <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4" />
-              ODV 保留样品 (FLAG 2 & 3) ── 👈 点击在下方大表高亮
-            </span>
-            <p className="text-xs text-slate-400 mt-1">
-              符合国际海洋质控标准，可直接进入 ODV 绘图与深度剖面分析
-            </p>
-          </div>
-          <div className="text-right">
-            <span className="text-2xl font-extrabold text-emerald-400">{retainedCount}</span>
-            <span className="text-xs text-slate-400 block mt-0.5">
-              ({allFieldSamples.length > 0 ? ((retainedCount / allFieldSamples.length) * 100).toFixed(1) : 0}%)
-            </span>
-          </div>
-        </div>
+      {(() => {
+        const realSamples = allFieldSamples.filter(s => {
+          const name = (s.sampleName || s.sampleId || '').toUpperCase();
+          return !name.includes('MQ') && !name.includes('CLEAN') && !name.includes('DSW') && !name.includes('SSW') && !name.includes('STD');
+        });
+        const realTotal = realSamples.length || (retainedCount + discardedCount) || 1;
+        const retPct = ((retainedCount / realTotal) * 100).toFixed(1);
+        const discPct = ((discardedCount / realTotal) * 100).toFixed(1);
+        const qcCount = allFieldSamples.length - (realSamples.length || (retainedCount + discardedCount));
 
-        <div
-          onClick={() => {
-            setSelectedFlagFilter(selectedFlagFilter === 4 || selectedFlagFilter === 'DISCARDED' ? 'ALL' : 4);
-            setTablePage(1);
-            scrollToTable();
-          }}
-          className={`cursor-pointer p-4 rounded-xl border transition-all flex items-center justify-between ${
-            selectedFlagFilter === 4 || selectedFlagFilter === 'DISCARDED'
-              ? 'bg-rose-950/90 border-rose-500 ring-2 ring-rose-500/70 shadow-lg shadow-rose-950/50'
-              : 'bg-slate-800/60 border-slate-700 hover:border-rose-500/60'
-          }`}
-        >
-          <div>
-            <span className="text-xs font-bold text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
-              <AlertCircle className="w-4 h-4" />
-              被丢弃/剔除样品 (FLAG 4 BAD) ── 👈 点击立即透视这 {discardedCount} 个数据！
-            </span>
-            <p className="text-xs text-slate-400 mt-1">
-              单针 RSD 超标 (&gt;5%) 或深海浓度异常 (&lt;36 μM)，已自动隔离
-            </p>
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div
+              onClick={() => {
+                setSelectedFlagFilter(selectedFlagFilter === 'RETAINED' ? 'ALL' : 'RETAINED');
+                setTablePage(1);
+                scrollToTable();
+              }}
+              className={`cursor-pointer p-4 rounded-xl border transition-all flex items-center justify-between ${
+                selectedFlagFilter === 'RETAINED'
+                  ? 'bg-emerald-950/80 border-emerald-400 ring-2 ring-emerald-500/50 shadow-lg shadow-emerald-950/50'
+                  : 'bg-slate-800/60 border-slate-700 hover:border-emerald-500/60'
+              }`}
+            >
+              <div>
+                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  ODV 保留海区水样 (FLAG 2 & 3) ── 👈 点击在下方大表高亮
+                </span>
+                <p className="text-xs text-slate-400 mt-1">
+                  符合国际海洋质控标准，可直接进入 ODV 绘图与深度剖面分析 (占实测水样 {retPct}%)
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-2xl font-extrabold text-emerald-400">{retainedCount}</span>
+                <span className="text-xs text-slate-400 block mt-0.5">
+                  ({retPct}% 海水水样)
+                </span>
+              </div>
+            </div>
+
+            <div
+              onClick={() => {
+                setSelectedFlagFilter(selectedFlagFilter === 4 || selectedFlagFilter === 'DISCARDED' ? 'ALL' : 4);
+                setTablePage(1);
+                scrollToTable();
+              }}
+              className={`cursor-pointer p-4 rounded-xl border transition-all flex items-center justify-between ${
+                selectedFlagFilter === 4 || selectedFlagFilter === 'DISCARDED'
+                  ? 'bg-rose-950/90 border-rose-500 ring-2 ring-rose-500/70 shadow-lg shadow-rose-950/50'
+                  : 'bg-slate-800/60 border-slate-700 hover:border-rose-500/60'
+              }`}
+            >
+              <div>
+                <span className="text-xs font-bold text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4" />
+                  被剔除海区水样 (FLAG 4 BAD) ── 👈 点击透视这 {discardedCount} 个数据！
+                </span>
+                <p className="text-xs text-slate-400 mt-1">
+                  单针 RSD 超标 (&gt;5%) 或深海浓度异常，已隔离 (其余 {qcCount} 瓶为 MQ/DSW 质控空白及参标)
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-2xl font-extrabold text-rose-400">{discardedCount}</span>
+                <span className="text-xs text-slate-400 block mt-0.5">
+                  ({discPct}% 海水水样)
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="text-right">
-            <span className="text-2xl font-extrabold text-rose-400">{discardedCount}</span>
-            <span className="text-xs text-slate-400 block mt-0.5">
-              ({allFieldSamples.length > 0 ? ((discardedCount / allFieldSamples.length) * 100).toFixed(1) : 0}%)
-            </span>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Control Panel: CRM Target Setting & Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -1084,63 +1144,110 @@ export default function QCDashboard({
           </div>
         </div>
 
-        {/* Filter Badges Bar */}
-        <div className="flex items-center gap-2 flex-wrap text-xs">
-          <button
-            onClick={() => { setSelectedFlagFilter('ALL'); setTablePage(1); }}
-            className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
-              selectedFlagFilter === 'ALL'
-                ? 'bg-sky-600 text-white font-bold shadow-lg shadow-sky-900/30'
-                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-700'
-            }`}
-          >
-            全部水文样品 ({allFieldSamples.length})
-          </button>
-          <button
-            onClick={() => { setSelectedFlagFilter('RETAINED'); setTablePage(1); }}
-            className={`px-3 py-1.5 rounded-xl font-medium transition-all ${
-              selectedFlagFilter === 'RETAINED'
-                ? 'bg-emerald-600 text-white font-bold shadow-lg shadow-emerald-900/30 ring-1 ring-emerald-400'
-                : 'bg-slate-900 text-emerald-400 hover:bg-emerald-950/40 border border-emerald-900/50'
-            }`}
-          >
-            🟢 ODV 保留样品 ({retainedCount})
-          </button>
-          <button
-            onClick={() => { setSelectedFlagFilter(4); setTablePage(1); }}
-            className={`px-3 py-1.5 rounded-xl font-bold transition-all ${
-              selectedFlagFilter === 4 || selectedFlagFilter === 'DISCARDED'
-                ? 'bg-rose-600 text-white shadow-lg shadow-rose-900/50 ring-2 ring-rose-400'
-                : 'bg-slate-900 text-rose-400 hover:bg-rose-950/50 border border-rose-900/50'
-            }`}
-          >
-            🔴 被丢弃/剔除样品 ({discardedCount})
-          </button>
-          <span className="text-slate-600 mx-1">|</span>
-          <button
-            onClick={() => { setSelectedFlagFilter(1); setTablePage(1); }}
-            className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-              selectedFlagFilter === 1 ? 'bg-emerald-500 text-white font-bold' : 'bg-slate-900/80 text-slate-400 border border-slate-700'
-            }`}
-          >
-            Flag 1 ({flagCounts[1]})
-          </button>
-          <button
-            onClick={() => { setSelectedFlagFilter(2); setTablePage(1); }}
-            className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-              selectedFlagFilter === 2 ? 'bg-sky-500 text-white font-bold' : 'bg-slate-900/80 text-slate-400 border border-slate-700'
-            }`}
-          >
-            Flag 2 ({flagCounts[2]})
-          </button>
-          <button
-            onClick={() => { setSelectedFlagFilter(3); setTablePage(1); }}
-            className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-              selectedFlagFilter === 3 ? 'bg-amber-500 text-white font-bold' : 'bg-slate-900/80 text-slate-400 border border-slate-700'
-            }`}
-          >
-            Flag 3 ({flagCounts[3]})
-          </button>
+        {/* Filter Badges Bar & Batch Actions */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-xl border border-slate-700/80">
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            <span className="text-slate-400 font-semibold mr-1">样品类别:</span>
+            <button
+              onClick={() => { setSampleTypeFilter('ALL'); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                sampleTypeFilter === 'ALL' ? 'bg-sky-600 text-white font-bold' : 'bg-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              全部样品
+            </button>
+            <button
+              onClick={() => { setSampleTypeFilter('FIELD'); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                sampleTypeFilter === 'FIELD' ? 'bg-sky-600 text-white font-bold' : 'bg-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              🌊 海区水样
+            </button>
+            <button
+              onClick={() => { setSampleTypeFilter('MQ'); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                sampleTypeFilter === 'MQ' ? 'bg-sky-500 text-white font-bold' : 'bg-slate-800 text-sky-400 hover:bg-sky-950/40 border border-sky-900/50'
+              }`}
+            >
+              🧪 MQ 水体空白
+            </button>
+            <button
+              onClick={() => { setSampleTypeFilter('CRM'); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                sampleTypeFilter === 'CRM' ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-800 text-emerald-400 hover:bg-emerald-950/40 border border-emerald-900/50'
+              }`}
+            >
+              🎯 深海参标 (CRM)
+            </button>
+            <span className="text-slate-600 mx-1">|</span>
+            <button
+              onClick={() => { setSelectedFlagFilter('ALL'); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                selectedFlagFilter === 'ALL' ? 'bg-slate-700 text-white font-bold' : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              全部 Flag
+            </button>
+            <button
+              onClick={() => { setSelectedFlagFilter(2); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                selectedFlagFilter === 2 ? 'bg-sky-500 text-white font-bold' : 'bg-slate-800/80 text-sky-400 border border-slate-700'
+              }`}
+            >
+              Flag 2 (良好合格)
+            </button>
+            <button
+              onClick={() => { setSelectedFlagFilter(4); setTablePage(1); }}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                selectedFlagFilter === 4 ? 'bg-rose-600 text-white font-bold' : 'bg-slate-800/80 text-rose-400 border border-slate-700'
+              }`}
+            >
+              Flag 4 (异常弃用)
+            </button>
+          </div>
+
+          {/* Batch Action Buttons */}
+          <div className="flex items-center gap-2">
+            {selectedRowIds.size > 0 && (
+              <span className="text-xs text-sky-400 font-semibold animate-pulse">
+                已勾选 {selectedRowIds.size} 项
+              </span>
+            )}
+            <button
+              onClick={() => handleBatchSetFlags(2)}
+              disabled={selectedRowIds.size === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 disabled:opacity-40 text-white font-semibold rounded-lg text-xs shadow-md transition-all"
+            >
+              ✨ 将选中项批量设为 Flag 2 (良好合格)
+            </button>
+            <button
+              onClick={() => {
+                allFieldSamples.forEach(s => {
+                  const name = (s.sampleName || s.sampleId || '').toUpperCase();
+                  const isMq = name.includes('MQ') || name.includes('CLEAN') || name.includes('BLANK');
+                  if (isMq) {
+                    if (s.docConc > 2.0) {
+                      handleFlagOverride(s.id, 4); // Force Flag 4 if MQ DOC > 2.0 uM
+                    } else if (s.woceFlag === 4 || s.cleanRsd > 15.0) {
+                      handleFlagOverride(s.id, 2); // Auto-smooth to Flag 2 if conc <= 2.0 uM
+                    }
+                  }
+                });
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold rounded-lg text-xs shadow-md transition-all border border-purple-400/30"
+              title="自动检测前期不稳MQ空白针并修正为 Flag 2（淡紫色高亮显示），DOC > 2.0 μM 自动设为 Flag 4 弃用"
+            >
+              🔮 智能平滑不稳洗液 (Auto-Smooth MQ)
+            </button>
+            <button
+              onClick={() => handleBatchSetFlags(4)}
+              disabled={selectedRowIds.size === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 disabled:opacity-40 font-semibold rounded-lg text-xs transition-all border border-slate-600"
+            >
+              设为 Flag 4 (弃用)
+            </button>
+          </div>
         </div>
 
         {/* Detailed Sample List Table */}
@@ -1148,7 +1255,25 @@ export default function QCDashboard({
           <table className="w-full text-left text-xs text-slate-300">
             <thead className="bg-slate-900/90 text-slate-400 uppercase font-semibold border-b border-slate-700">
               <tr>
-                <th className="p-3 text-center">状态 (Status)</th>
+                <th className="p-3 text-center w-10">
+                  <input
+                    type="checkbox"
+                    checked={paginatedSamples.length > 0 && paginatedSamples.every(s => selectedRowIds.has(s.id))}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedRowIds(prev => {
+                          const next = new Set(prev);
+                          paginatedSamples.forEach(s => next.add(s.id));
+                          return next;
+                        });
+                      } else {
+                        setSelectedRowIds(new Set());
+                      }
+                    }}
+                    className="rounded border-slate-700 bg-slate-900 text-sky-500 focus:ring-sky-500"
+                  />
+                </th>
+                <th className="p-3 text-center">状态</th>
                 <th className="p-3">柱号 / 序列</th>
                 <th className="p-3">站位 (Station)</th>
                 <th className="p-3">深度 [m]</th>
@@ -1157,23 +1282,47 @@ export default function QCDashboard({
                 <th className="p-3 text-right">Clean Mean 面积</th>
                 <th className="p-3 text-right">Clean RSD (%)</th>
                 <th className="p-3 text-right">实测 DOC (μmol/L)</th>
-                <th className="p-3 text-center">WOCE Flag</th>
+                <th className="p-3 text-center">WOCE Flag (可手动修改)</th>
                 <th className="p-3">质控舍弃原因 / 诊断分析 (Diagnosis)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {paginatedSamples.length > 0 ? (
-                paginatedSamples.map((s, idx) => (
+                paginatedSamples.map((s, idx) => {
+                  const isOverridden = customFlags[s.id] !== undefined;
+                  const isPurpleSmoothed = isOverridden && s.woceFlag === 2 && (s.sampleName || '').toUpperCase().includes('MQ');
+
+                  return (
                   <tr
                     key={s.id || idx}
                     className={`transition-colors ${
-                      s.woceFlag === 4
+                      selectedRowIds.has(s.id)
+                        ? 'bg-sky-950/40 ring-1 ring-sky-500/40'
+                        : isPurpleSmoothed
+                        ? 'bg-purple-950/30 hover:bg-purple-950/50 border-l-2 border-purple-400'
+                        : s.woceFlag === 4
                         ? 'bg-rose-950/20 hover:bg-rose-950/40'
                         : s.woceFlag === 3
                         ? 'bg-amber-950/10 hover:bg-amber-950/30'
                         : 'hover:bg-slate-700/20'
                     }`}
                   >
+                    <td className="p-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedRowIds.has(s.id)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setSelectedRowIds(prev => {
+                            const next = new Set(prev);
+                            if (checked) next.add(s.id);
+                            else next.delete(s.id);
+                            return next;
+                          });
+                        }}
+                        className="rounded border-slate-700 bg-slate-900 text-sky-500 focus:ring-sky-500"
+                      />
+                    </td>
                     <td className="p-3 text-center">
                       <span
                         className={`px-2 py-0.5 rounded text-[11px] font-bold ${
@@ -1195,7 +1344,18 @@ export default function QCDashboard({
                       {s.depth !== null ? `${s.depth} m` : '-'}
                     </td>
                     <td className="p-3 text-white font-medium">
-                      {s.sampleName || s.sampleId}
+                      <div className="flex items-center gap-1.5">
+                        <span>{s.sampleName || s.sampleId}</span>
+                        {isPurpleSmoothed ? (
+                          <span className="px-1.5 py-0.2 bg-purple-500/20 text-purple-300 border border-purple-400/40 rounded text-[10px] font-semibold">
+                            🔮 AI 平滑
+                          </span>
+                        ) : (s as any).isCustomOverridden && (
+                          <span className="px-1.5 py-0.2 bg-blue-500/20 text-blue-300 border border-blue-400/40 rounded text-[10px] font-semibold">
+                            人工修正
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-3 text-right font-mono text-slate-400 text-[11px]">
                       {s.injections.map(v => v.toFixed(3)).join(' | ')}
@@ -1214,25 +1374,48 @@ export default function QCDashboard({
                       {s.docConc.toFixed(2)}
                     </td>
                     <td className="p-3 text-center">
-                      <span className={`px-2 py-0.5 rounded font-bold text-[11px] ${
-                        s.woceFlag === 4
-                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                          : s.woceFlag === 3
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                      }`}>
-                        Flag {s.woceFlag}
-                      </span>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <select
+                          value={s.woceFlag}
+                          onChange={(e) => handleFlagOverride(s.id, Number(e.target.value) as QCFlagLevel)}
+                          className={`px-2 py-1 rounded font-bold text-xs border focus:outline-none focus:ring-2 focus:ring-sky-500 cursor-pointer ${
+                            isPurpleSmoothed
+                              ? 'bg-purple-950 text-purple-300 border-purple-400'
+                              : s.woceFlag === 1
+                              ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
+                              : s.woceFlag === 2
+                              ? 'bg-blue-950 text-blue-300 border-blue-500/50'
+                              : s.woceFlag === 3
+                              ? 'bg-amber-950 text-amber-300 border-amber-500/50'
+                              : 'bg-rose-950 text-rose-300 border-rose-500/50'
+                          }`}
+                        >
+                          <option value={1} className="bg-slate-900 text-emerald-400">Flag 1 (优秀)</option>
+                          <option value={2} className="bg-slate-900 text-blue-400">Flag 2 (合格可用)</option>
+                          <option value={3} className="bg-slate-900 text-amber-400">Flag 3 (轻微漂移)</option>
+                          <option value={4} className="bg-slate-900 text-rose-400">Flag 4 (严重异常/弃用)</option>
+                        </select>
+                        {isOverridden && (
+                          <button
+                            onClick={() => handleFlagOverride(s.id, undefined as any)}
+                            className="px-1.5 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded border border-slate-700"
+                            title="还原该行至原始默认评估规则"
+                          >
+                            ↩️ 还原
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="p-3 text-xs">
                       <span className={`${
-                        s.woceFlag === 4 ? 'text-rose-300 font-semibold' : s.woceFlag === 3 ? 'text-amber-300' : 'text-slate-400'
+                        s.woceFlag === 4 ? 'text-rose-300 font-semibold' : s.woceFlag === 3 ? 'text-amber-300' : 'text-slate-300'
                       }`}>
                         {s.diagnosis}
                       </span>
                     </td>
                   </tr>
-                ))
+                );
+              })
               ) : (
                 <tr>
                   <td colSpan={11} className="p-8 text-center text-slate-500 text-xs">

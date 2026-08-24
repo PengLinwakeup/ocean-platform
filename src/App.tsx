@@ -78,6 +78,7 @@ export default function App() {
   const [excludedInjections, setExcludedInjections] = useState<Record<string, boolean[]>>(() => loadSavedState('ocean_excludedInjections', {})); // group id -> boolean array of excluded injections
   const [rejectedSamples, setRejectedSamples] = useState<Record<string, boolean>>(() => loadSavedState('ocean_rejectedSamples', {})); // group id -> rejected boolean
   const [customSampleNames, setCustomSampleNames] = useState<Record<string, string>>(() => loadSavedState('ocean_customSampleNames', {}));
+  const [customFlags, setCustomFlags] = useState<Record<string, number>>(() => loadSavedState('ocean_customFlags', {}));
   const [activeQcModalCurveId, setActiveQcModalCurveId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [disabledCurves, setDisabledCurves] = useState<Record<string, boolean>>(() => loadSavedState('ocean_disabledCurves', {}));
@@ -115,6 +116,7 @@ export default function App() {
     localStorage.setItem('ocean_excludedInjections', JSON.stringify(excludedInjections));
     localStorage.setItem('ocean_rejectedSamples', JSON.stringify(rejectedSamples));
     localStorage.setItem('ocean_customSampleNames', JSON.stringify(customSampleNames));
+    localStorage.setItem('ocean_customFlags', JSON.stringify(customFlags));
     localStorage.setItem('ocean_sampleSortOrder', JSON.stringify(sampleSortOrder));
     localStorage.setItem('ocean_selectedCurveId', JSON.stringify(selectedCurveId));
     localStorage.setItem('ocean_emptyInjectionThreshold', JSON.stringify(emptyInjectionThreshold));
@@ -135,7 +137,7 @@ export default function App() {
   }, [
     currentStep, files, rawInjections, stationCoords, stdStockC,
     stdDilutionFactor, stdUsedC, dilutionFactors, enabledStds, customDilutions,
-    excludedInjections, rejectedSamples, customSampleNames, sampleSortOrder, selectedCurveId,
+    excludedInjections, rejectedSamples, customSampleNames, customFlags, sampleSortOrder, selectedCurveId,
     emptyInjectionThreshold, dswMin, dswMax, sswMin, sswMax, curveOffsets, disabledCurves, customStdUsedCs,
     hydroSamples, hydroParameters, hydroSheetNames, hydroSelectedSheet, enableBlankCorrection, forceZeroIntercept
   ]);
@@ -1200,7 +1202,7 @@ export default function App() {
     // 2. Filter by status
     if (qcSelectedStatus !== 'all') {
       list = list.filter(s => {
-        const isRsdHigh = s.rsd > 2.0;
+        const isRsdHigh = s.rsd > 3.0;
         if (qcSelectedStatus === 'qualified') {
           return !s.isRejected && !isRsdHigh;
         }
@@ -2451,6 +2453,13 @@ export default function App() {
               onTargetCrmConcChange={setDswTargetConc}
               stationCoords={stationCoords}
               hydroSamples={hydroSamples}
+              customFlags={customFlags as any}
+              onCustomFlagChange={(id, flag) => setCustomFlags(prev => ({ ...prev, [id]: flag }))}
+              onBatchSetFlags={(ids, flag) => setCustomFlags(prev => {
+                const next = { ...prev };
+                ids.forEach(id => { next[id] = flag; });
+                return next;
+              })}
             />
 
             <div className="page-header">
@@ -2852,7 +2861,7 @@ export default function App() {
                   </thead>
                   <tbody>
                     {paginatedQcSamples.map((s) => {
-                      const isRsdHigh = s.rsd > 2.0;
+                      const isRsdHigh = s.rsd > 3.0;
                       let trClass = "";
                       if (s.isRejected) trClass = "tr-danger opacity-50";
                       else if (isRsdHigh) trClass = "tr-warning";
@@ -3178,7 +3187,7 @@ export default function App() {
                     </thead>
                     <tbody>
                       {curveSamples.map((s) => {
-                        const isRsdHigh = s.rsd > 2.0;
+                        const isRsdHigh = s.rsd > 3.0;
                         let trClass = "";
                         if (s.isRejected) trClass = "tr-danger opacity-50";
                         else if (isRsdHigh) trClass = "tr-warning";
