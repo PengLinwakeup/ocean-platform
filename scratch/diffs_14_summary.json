@@ -1,0 +1,1430 @@
+[
+  {
+    "row": 31,
+    "sid": "SO308-41446",
+    "station": "ST-49",
+    "depth": 90,
+    "injs_14": [
+      6.607,
+      6.812,
+      6.841,
+      6.753
+    ],
+    "formula_14": "=AVERAGE(G31,H31,I31)",
+    "rsd_formula_14": "=STDEV(G31,H31,I31)/J31*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.7% <= 3.0%), SD (0.0448)"
+  },
+  {
+    "row": 261,
+    "sid": "SO308-41290-ST43-300",
+    "station": "ST-43",
+    "depth": 300,
+    "injs_14": [
+      5.994,
+      6.068,
+      6.131,
+      6.045
+    ],
+    "formula_14": "=AVERAGE(F261,G261,I261)",
+    "rsd_formula_14": "=STDEV(F261,G261,I261)/J261*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.6% <= 3.0%), SD (0.0379)"
+  },
+  {
+    "row": 323,
+    "sid": "SO308-41188-ST39-1800",
+    "station": "ST-39",
+    "depth": 1800,
+    "injs_14": [
+      0,
+      0.0262,
+      0,
+      0.2744
+    ],
+    "formula_14": "=AVERAGE(F323,G323,H323)",
+    "rsd_formula_14": "=STDEV(F323,G323,H323)/J323*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 324,
+    "sid": "SO308-41189-ST39-1400",
+    "station": "ST-39",
+    "depth": 1400,
+    "injs_14": [
+      0,
+      0.1472,
+      0,
+      0.1322
+    ],
+    "formula_14": "=AVERAGE(F324,H324,I324)",
+    "rsd_formula_14": "=STDEV(F324,H324,I324)/J324*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 372,
+    "sid": "SO308-41133-ST37-5400",
+    "station": "ST-37",
+    "depth": 5400,
+    "injs_14": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(F372,G372,H372)",
+    "rsd_formula_14": "=STDEV(F372,G372,H372)/J372*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Deep sea low DOC anomaly (0.0 uM < 36 uM at 5400m)"
+  },
+  {
+    "row": 603,
+    "sid": "SO308-41048-ST34-840",
+    "station": "ST-34",
+    "depth": 840,
+    "injs_14": [
+      0.1153,
+      0,
+      0.047,
+      0
+    ],
+    "formula_14": "=AVERAGE(G603,H603,I603)",
+    "rsd_formula_14": "=STDEV(G603,H603,I603)/J603*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 627,
+    "sid": "SO308-41064-ST32-3200",
+    "station": "ST-32",
+    "depth": 3200,
+    "injs_14": [
+      0.0936,
+      0,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(G627,H627,I627)",
+    "rsd_formula_14": "=STDEV(G627,H627,I627)/J627*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Deep sea low DOC anomaly (0.0 uM < 36 uM at 3200m)"
+  },
+  {
+    "row": 632,
+    "sid": "SO308-41068-ST32-1600",
+    "station": "ST-32",
+    "depth": 1600,
+    "injs_14": [
+      0.0977,
+      0,
+      0.0056,
+      0
+    ],
+    "formula_14": "=AVERAGE(G632,H632,I632)",
+    "rsd_formula_14": "=STDEV(G632,H632,I632)/J632*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 684,
+    "sid": "SO308-40993-ST33-300",
+    "station": "ST-33",
+    "depth": 300,
+    "injs_14": [
+      0.1176,
+      0,
+      0,
+      0.1351
+    ],
+    "formula_14": "=AVERAGE(F684,G684,H684)",
+    "rsd_formula_14": "=STDEV(F684,G684,H684)/J684*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 694,
+    "sid": "SO308-41004-ST31-300",
+    "station": "ST-31",
+    "depth": 300,
+    "injs_14": [
+      0.0458,
+      0,
+      0,
+      0.0705
+    ],
+    "formula_14": "=AVERAGE(F694,G694,H694)",
+    "rsd_formula_14": "=STDEV(F694,G694,H694)/J694*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 737,
+    "sid": "SO308-40874-ST29-300",
+    "station": "ST-29",
+    "depth": 300,
+    "injs_14": [
+      17.47,
+      17.2,
+      17.31,
+      17.45
+    ],
+    "formula_14": "=AVERAGE(F737,H737,I737)",
+    "rsd_formula_14": "=STDEV(F737,H737,I737)/J737*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Extreme concentration spike anomaly (314.4 uM > 100 uM & 2.5x neighbor avg)"
+  },
+  {
+    "row": 740,
+    "sid": "SO308-40881-ST29-130",
+    "station": "ST-29",
+    "depth": 130,
+    "injs_14": [
+      8.915,
+      8.932,
+      8.89,
+      9.018
+    ],
+    "formula_14": "=AVERAGE(F740,G740,H740)",
+    "rsd_formula_14": "=STDEV(F740,G740,H740)/J740*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.2% <= 3.0%), SD (0.0211)"
+  },
+  {
+    "row": 766,
+    "sid": "SO308-40904-ST30-1000",
+    "station": "ST-30",
+    "depth": 1000,
+    "injs_14": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(F766,G766,H766)",
+    "rsd_formula_14": "=STDEV(F766,G766,H766)/J766*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Deep sea low DOC anomaly (0.0 uM < 36 uM at 1000m)"
+  },
+  {
+    "row": 770,
+    "sid": "SO308-40908-ST30-250",
+    "station": "ST-30",
+    "depth": 250,
+    "injs_14": [
+      0.0788,
+      0.0381,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(G770,H770,I770)",
+    "rsd_formula_14": "=STDEV(G770,H770,I770)/J770*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 782,
+    "sid": "SO308-40916-ST30-3050",
+    "station": "ST-30",
+    "depth": 3050,
+    "injs_14": [
+      0.1607,
+      0,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(G782,H782,I782)",
+    "rsd_formula_14": "=STDEV(G782,H782,I782)/J782*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Deep sea low DOC anomaly (0.0 uM < 36 uM at 3050m)"
+  },
+  {
+    "row": 788,
+    "sid": "SO308-40919-ST30-1000",
+    "station": "ST-30",
+    "depth": 1000,
+    "injs_14": [
+      0.0726,
+      0,
+      0,
+      0
+    ],
+    "formula_14": "=F788",
+    "rsd_formula_14": "0",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Deep sea low DOC anomaly (1.3 uM < 36 uM at 1000m)"
+  },
+  {
+    "row": 1061,
+    "sid": "SO308-40776-ST21-2800",
+    "station": "ST-21",
+    "depth": 2800,
+    "injs_14": [
+      2.378,
+      2.236,
+      2.063,
+      2.189
+    ],
+    "formula_14": "=AVERAGE(G1061,I1061)",
+    "rsd_formula_14": "=STDEV(G1061,I1061)/J1061*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.5% <= 3.0%), SD (0.0332)"
+  },
+  {
+    "row": 1068,
+    "sid": "SO308-40780-ST21-1500",
+    "station": "ST-21",
+    "depth": 1500,
+    "injs_14": [
+      2.431,
+      2.453,
+      2.31,
+      2.241
+    ],
+    "formula_14": "=AVERAGE(F1068,G1068)",
+    "rsd_formula_14": "=STDEV(F1068,G1068)/J1068*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.6% <= 3.0%), SD (0.0156)"
+  },
+  {
+    "row": 1078,
+    "sid": "SO308-40786-ST21-300",
+    "station": "ST-21",
+    "depth": 300,
+    "injs_14": [
+      3.111,
+      3.034,
+      2.801,
+      2.759
+    ],
+    "formula_14": "=AVERAGE(F1078,G1078)",
+    "rsd_formula_14": "=STDEV(F1078,G1078)/J1078*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.8% <= 3.0%), SD (0.0544)"
+  },
+  {
+    "row": 1082,
+    "sid": "SO308-40788-ST21-150",
+    "station": "ST-21",
+    "depth": 150,
+    "injs_14": [
+      3.57,
+      3.316,
+      3.055,
+      3.268
+    ],
+    "formula_14": "=AVERAGE(G1082,I1082)",
+    "rsd_formula_14": "=STDEV(G1082,I1082)/J1082*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.0% <= 3.0%), SD (0.0339)"
+  },
+  {
+    "row": 1118,
+    "sid": "SO308-40646-ST22-50",
+    "station": "ST-22",
+    "depth": 50,
+    "injs_14": [
+      3.662,
+      3.465,
+      3.337,
+      3.397
+    ],
+    "formula_14": "=AVERAGE(G1118,H1118,I1118)",
+    "rsd_formula_14": "=STDEV(G1118,H1118,I1118)/J1118*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.9% <= 3.0%), SD (0.0640)"
+  },
+  {
+    "row": 1130,
+    "sid": "SO308-40653-ST20-4700",
+    "station": "ST-20",
+    "depth": 4700,
+    "injs_14": [
+      2.506,
+      2.428,
+      2.511,
+      2.289
+    ],
+    "formula_14": "=AVERAGE(F1130,G1130,H1130)",
+    "rsd_formula_14": "=STDEV(F1130,G1130,H1130)/J1130*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.9% <= 3.0%), SD (0.0465)"
+  },
+  {
+    "row": 1137,
+    "sid": "SO308-40658-ST20-2200",
+    "station": "ST-20",
+    "depth": 2200,
+    "injs_14": [
+      2.392,
+      2.332,
+      2.532,
+      2.291
+    ],
+    "formula_14": "=AVERAGE(F1137,G1137,I1137)",
+    "rsd_formula_14": "=STDEV(F1137,G1137,I1137)/J1137*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.2% <= 3.0%), SD (0.0508)"
+  },
+  {
+    "row": 1141,
+    "sid": "SO308-40661-ST20-1200",
+    "station": "ST-20",
+    "depth": 1200,
+    "injs_14": [
+      2.447,
+      2.454,
+      2.338,
+      2.167
+    ],
+    "formula_14": "=AVERAGE(F1141,G1141,H1141)",
+    "rsd_formula_14": "=STDEV(F1141,G1141,H1141)/J1141*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.7% <= 3.0%), SD (0.0650)"
+  },
+  {
+    "row": 1143,
+    "sid": "SO308-40663-ST20-800",
+    "station": "ST-20",
+    "depth": 800,
+    "injs_14": [
+      2.634,
+      2.574,
+      2.345,
+      2.477
+    ],
+    "formula_14": "=AVERAGE(F1143,G1143,I1143)",
+    "rsd_formula_14": "=STDEV(F1143,G1143,I1143)/J1143*100",
+    "flag_dst": 3,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.1%)"
+  },
+  {
+    "row": 1145,
+    "sid": "SO308-40665-ST20-450",
+    "station": "ST-20",
+    "depth": 450,
+    "injs_14": [
+      2.892,
+      2.757,
+      2.674,
+      2.597
+    ],
+    "formula_14": "=AVERAGE(G1145,H1145,I1145)",
+    "rsd_formula_14": "=STDEV(G1145,H1145,I1145)/J1145*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (3.0% <= 3.0%), SD (0.0800)"
+  },
+  {
+    "row": 1150,
+    "sid": "SO308-40667-ST20-250",
+    "station": "ST-20",
+    "depth": 250,
+    "injs_14": [
+      2.918,
+      3.278,
+      2.765,
+      2.831
+    ],
+    "formula_14": "=AVERAGE(F1150,H1150,I1150)",
+    "rsd_formula_14": "=STDEV(F1150,H1150,I1150)/J1150*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.7% <= 3.0%), SD (0.0767)"
+  },
+  {
+    "row": 1154,
+    "sid": "SO308-40671-ST20-100",
+    "station": "ST-20",
+    "depth": 100,
+    "injs_14": [
+      3.276,
+      3.012,
+      3.375,
+      3.157
+    ],
+    "formula_14": "=AVERAGE(F1154,H1154,I1154)",
+    "rsd_formula_14": "=STDEV(F1154,H1154,I1154)/J1154*100",
+    "flag_dst": 3,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.3%)"
+  },
+  {
+    "row": 1193,
+    "sid": "SO308-40460-ST18-2410",
+    "station": "ST-18",
+    "depth": 2410,
+    "injs_14": [
+      2.532,
+      2.66,
+      2.393,
+      2.434
+    ],
+    "formula_14": "=AVERAGE(F1193,H1193,I1193)",
+    "rsd_formula_14": "=STDEV(F1193,H1193,I1193)/J1193*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.9% <= 3.0%), SD (0.0714)"
+  },
+  {
+    "row": 1208,
+    "sid": "SO308-40469-ST18-600",
+    "station": "ST-18",
+    "depth": 600,
+    "injs_14": [
+      2.854,
+      2.814,
+      2.672,
+      2.623
+    ],
+    "formula_14": "=AVERAGE(F1208,G1208)",
+    "rsd_formula_14": "=STDEV(F1208,G1208)/J1208*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.0% <= 3.0%), SD (0.0283)"
+  },
+  {
+    "row": 1211,
+    "sid": "SO308-40470-ST18-450",
+    "station": "ST-18",
+    "depth": 450,
+    "injs_14": [
+      2.771,
+      2.823,
+      2.816,
+      3.082
+    ],
+    "formula_14": "=AVERAGE(F1211,G1211,H1211)",
+    "rsd_formula_14": "=STDEV(F1211,G1211,H1211)/J1211*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.0% <= 3.0%), SD (0.0282)"
+  },
+  {
+    "row": 1214,
+    "sid": "SO308-40473-ST18-250",
+    "station": "ST-18",
+    "depth": 250,
+    "injs_14": [
+      2.965,
+      3.264,
+      2.931,
+      3.094
+    ],
+    "formula_14": "=AVERAGE(F1214,H1214,I1214)",
+    "rsd_formula_14": "=STDEV(F1214,H1214,I1214)/J1214*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.9% <= 3.0%), SD (0.0860)"
+  },
+  {
+    "row": 1251,
+    "sid": "SO308-40495-ST17-2800",
+    "station": "ST-17",
+    "depth": 2800,
+    "injs_14": [
+      2.442,
+      2.373,
+      2.505,
+      2.538
+    ],
+    "formula_14": "=AVERAGE(F1251,G1251,H1251)",
+    "rsd_formula_14": "=STDEV(F1251,G1251,H1251)/J1251*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.7% <= 3.0%), SD (0.0660)"
+  },
+  {
+    "row": 1255,
+    "sid": "SO308-40499-ST17-1800",
+    "station": "ST-17",
+    "depth": 1800,
+    "injs_14": [
+      2.623,
+      2.762,
+      2.579,
+      2.634
+    ],
+    "formula_14": "=AVERAGE(F1255,H1255,I1255)",
+    "rsd_formula_14": "=STDEV(F1255,H1255,I1255)/J1255*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.1% <= 3.0%), SD (0.0291)"
+  },
+  {
+    "row": 1262,
+    "sid": "SO308-40504-ST17-650",
+    "station": "ST-17",
+    "depth": 650,
+    "injs_14": [
+      2.858,
+      3.015,
+      2.968,
+      2.69
+    ],
+    "formula_14": "=AVERAGE(F1262,G1262,H1262)",
+    "rsd_formula_14": "=STDEV(F1262,G1262,H1262)/J1262*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.7% <= 3.0%), SD (0.0806)"
+  },
+  {
+    "row": 1271,
+    "sid": "SO308-40511-ST17-125",
+    "station": "ST-17",
+    "depth": 125,
+    "injs_14": [
+      3.714,
+      3.951,
+      3.538,
+      3.58
+    ],
+    "formula_14": "=AVERAGE(F1271,H1271,I1271)",
+    "rsd_formula_14": "=STDEV(F1271,H1271,I1271)/J1271*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.5% <= 3.0%), SD (0.0919)"
+  },
+  {
+    "row": 1313,
+    "sid": "SO308-40388-ST15-3983",
+    "station": "ST-15",
+    "depth": 3983,
+    "injs_14": [
+      2.501,
+      2.508,
+      2.607,
+      2.789
+    ],
+    "formula_14": "=AVERAGE(F1313,G1313,H1313)",
+    "rsd_formula_14": "=STDEV(F1313,G1313,H1313)/J1313*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.3% <= 3.0%), SD (0.0593)"
+  },
+  {
+    "row": 1325,
+    "sid": "SO308-40397-ST15-1300",
+    "station": "ST-15",
+    "depth": 1300,
+    "injs_14": [
+      2.448,
+      2.689,
+      2.727,
+      2.795
+    ],
+    "formula_14": "=AVERAGE(G1325,H1325,I1325)",
+    "rsd_formula_14": "=STDEV(G1325,H1325,I1325)/J1325*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.0% <= 3.0%), SD (0.0537)"
+  },
+  {
+    "row": 1385,
+    "sid": "SO308-40422-ST13-4364",
+    "station": "ST-13",
+    "depth": 4364,
+    "injs_14": [
+      3.051,
+      2.922,
+      3.241,
+      3.089
+    ],
+    "formula_14": "=AVERAGE(F1385,G1385,I1385)",
+    "rsd_formula_14": "=STDEV(F1385,G1385,I1385)/J1385*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.9% <= 3.0%), SD (0.0875)"
+  },
+  {
+    "row": 1387,
+    "sid": "SO308-40424-ST13-3200",
+    "station": "ST-13",
+    "depth": 3200,
+    "injs_14": [
+      2.591,
+      2.435,
+      2.727,
+      2.659
+    ],
+    "formula_14": "=AVERAGE(F1387,H1387,I1387)",
+    "rsd_formula_14": "=STDEV(F1387,H1387,I1387)/J1387*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.6% <= 3.0%), SD (0.0680)"
+  },
+  {
+    "row": 1395,
+    "sid": "SO308-40430-ST13-1300",
+    "station": "ST-13",
+    "depth": 1300,
+    "injs_14": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(F1395,G1395,H1395)",
+    "rsd_formula_14": "=STDEV(F1395,G1395,H1395)/J1395*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Deep sea low DOC anomaly (0.0 uM < 36 uM at 1300m)"
+  },
+  {
+    "row": 1396,
+    "sid": "SO308-40431-ST13-1100",
+    "station": "ST-13",
+    "depth": 1100,
+    "injs_14": [
+      0,
+      0.1197,
+      0.0509,
+      0
+    ],
+    "formula_14": "=AVERAGE(F1396,H1396,I1396)",
+    "rsd_formula_14": "=STDEV(F1396,H1396,I1396)/J1396*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 1397,
+    "sid": "SO308-40432-ST13-950",
+    "station": "ST-13",
+    "depth": 950,
+    "injs_14": [
+      0.0641,
+      0.0721,
+      0,
+      0
+    ],
+    "formula_14": "=AVERAGE(F1397,H1397,I1397)",
+    "rsd_formula_14": "=STDEV(F1397,H1397,I1397)/J1397*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (173.2% > 5.0%)"
+  },
+  {
+    "row": 1402,
+    "sid": "SO308-40434-ST13-1100",
+    "station": "ST-13",
+    "depth": 1100,
+    "injs_14": [
+      2.699,
+      2.793,
+      2.711,
+      2.639
+    ],
+    "formula_14": "=AVERAGE(F1402,H1402,I1402)",
+    "rsd_formula_14": "=STDEV(F1402,H1402,I1402)/J1402*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.4% <= 3.0%), SD (0.0386)"
+  },
+  {
+    "row": 1403,
+    "sid": "SO308-40435-ST13-950",
+    "station": "ST-13",
+    "depth": 950,
+    "injs_14": [
+      3.366,
+      3.381,
+      3.344,
+      3.316
+    ],
+    "formula_14": "=AVERAGE(F1403,G1403,H1403)",
+    "rsd_formula_14": "=STDEV(F1403,G1403,H1403)/J1403*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.6% <= 3.0%), SD (0.0186)"
+  },
+  {
+    "row": 1427,
+    "sid": "SO308-40452-ST12-2400",
+    "station": "ST-12",
+    "depth": 2400,
+    "injs_14": [
+      2.375,
+      2.544,
+      2.375,
+      2.321
+    ],
+    "formula_14": "=AVERAGE(F1427,H1427,I1427)",
+    "rsd_formula_14": "=STDEV(F1427,H1427,I1427)/J1427*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.3% <= 3.0%), SD (0.0312)"
+  },
+  {
+    "row": 1430,
+    "sid": "SO308-40455-ST12-1400",
+    "station": "ST-12",
+    "depth": 1400,
+    "injs_14": [
+      2.648,
+      2.507,
+      2.416,
+      2.388
+    ],
+    "formula_14": "=AVERAGE(G1430,H1430,I1430)",
+    "rsd_formula_14": "=STDEV(G1430,H1430,I1430)/J1430*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.6% <= 3.0%), SD (0.0622)"
+  },
+  {
+    "row": 1485,
+    "sid": "SO308-40319-ST10-1700",
+    "station": "ST-10",
+    "depth": 1700,
+    "injs_14": [
+      2.504,
+      2.335,
+      2.357,
+      2.272
+    ],
+    "formula_14": "=AVERAGE(G1485,H1485,I1485)",
+    "rsd_formula_14": "=STDEV(G1485,H1485,I1485)/J1485*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.9% <= 3.0%), SD (0.0441)"
+  },
+  {
+    "row": 1489,
+    "sid": "SO308-40322-ST10-700",
+    "station": "ST-10",
+    "depth": 700,
+    "injs_14": [
+      2.538,
+      2.298,
+      2.476,
+      2.375
+    ],
+    "formula_14": "=AVERAGE(F1489,H1489,I1489)",
+    "rsd_formula_14": "=STDEV(F1489,H1489,I1489)/J1489*100",
+    "flag_dst": 3,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.3%)"
+  },
+  {
+    "row": 1513,
+    "sid": "SO308-40333-ST10-35",
+    "station": "ST-10",
+    "depth": 35,
+    "injs_14": [
+      4.059,
+      3.727,
+      3.589,
+      3.671
+    ],
+    "formula_14": "=AVERAGE(G1513,H1513,I1513)",
+    "rsd_formula_14": "=STDEV(G1513,H1513,I1513)/J1513*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.9% <= 3.0%), SD (0.0694)"
+  },
+  {
+    "row": 1541,
+    "sid": "SO308-40496-ST9-3038",
+    "station": "ST-9",
+    "depth": 3038,
+    "injs_14": [
+      2.482,
+      2.491,
+      2.524,
+      2.712
+    ],
+    "formula_14": "=AVERAGE(F1541,G1541,H1541)",
+    "rsd_formula_14": "=STDEV(F1541,G1541,H1541)/J1541*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.9% <= 3.0%), SD (0.0221)"
+  },
+  {
+    "row": 1542,
+    "sid": "SO308-40497-ST9-3000",
+    "station": "ST-9",
+    "depth": 3000,
+    "injs_14": [
+      2.409,
+      2.581,
+      2.371,
+      2.575
+    ],
+    "formula_14": "=AVERAGE(F1542,G1542,I1542)",
+    "rsd_formula_14": "=STDEV(F1542,G1542,I1542)/J1542*100",
+    "flag_dst": 3,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.9%)"
+  },
+  {
+    "row": 1543,
+    "sid": "SO308-40498-ST9-2800",
+    "station": "ST-9",
+    "depth": 2800,
+    "injs_14": [
+      2.64,
+      2.614,
+      2.602,
+      2.818
+    ],
+    "formula_14": "=AVERAGE(F1543,G1543,H1543)",
+    "rsd_formula_14": "=STDEV(F1543,G1543,H1543)/J1543*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.7% <= 3.0%), SD (0.0194)"
+  },
+  {
+    "row": 1544,
+    "sid": "SO308-40499-ST9-2500",
+    "station": "ST-9",
+    "depth": 2500,
+    "injs_14": [
+      2.448,
+      2.359,
+      2.508,
+      2.411
+    ],
+    "formula_14": "=AVERAGE(F1544,G1544,I1544)",
+    "rsd_formula_14": "=STDEV(F1544,G1544,I1544)/J1544*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.9% <= 3.0%), SD (0.0447)"
+  },
+  {
+    "row": 1545,
+    "sid": "SO308-40500-ST9-2300",
+    "station": "ST-9",
+    "depth": 2300,
+    "injs_14": [
+      0.0315,
+      2.467,
+      2.465,
+      2.479
+    ],
+    "formula_14": "=AVERAGE(G1545,H1545,I1545)",
+    "rsd_formula_14": "=STDEV(G1545,H1545,I1545)/J1545*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.3% <= 3.0%), SD (0.0076)"
+  },
+  {
+    "row": 1549,
+    "sid": "SO308-40501-ST9-2000",
+    "station": "ST-9",
+    "depth": 2000,
+    "injs_14": [
+      2.498,
+      2.789,
+      2.389,
+      2.475
+    ],
+    "formula_14": "=AVERAGE(F1549,H1549,I1549)",
+    "rsd_formula_14": "=STDEV(F1549,H1549,I1549)/J1549*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.3% <= 3.0%), SD (0.0575)"
+  },
+  {
+    "row": 1550,
+    "sid": "SO308-40502-ST9-1700",
+    "station": "ST-9",
+    "depth": 1700,
+    "injs_14": [
+      2.491,
+      2.623,
+      2.643,
+      2.462
+    ],
+    "formula_14": "=AVERAGE(F1550,G1550,H1550)",
+    "rsd_formula_14": "=STDEV(F1550,G1550,H1550)/J1550*100",
+    "flag_dst": 3,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.2%)"
+  },
+  {
+    "row": 1551,
+    "sid": "SO308-40503-ST9-1500",
+    "station": "ST-9",
+    "depth": 1500,
+    "injs_14": [
+      2.395,
+      2.402,
+      2.322,
+      2.375
+    ],
+    "formula_14": "=AVERAGE(F1551,G1551,I1551)",
+    "rsd_formula_14": "=STDEV(F1551,G1551,I1551)/J1551*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.6% <= 3.0%), SD (0.0140)"
+  },
+  {
+    "row": 1553,
+    "sid": "SO308-40505-ST9-1000",
+    "station": "ST-9",
+    "depth": 1000,
+    "injs_14": [
+      2.51,
+      2.486,
+      2.525,
+      2.5
+    ],
+    "formula_14": "=AVERAGE(F1553,G1553,I1553)",
+    "rsd_formula_14": "=STDEV(F1553,G1553,I1553)/J1553*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.5% <= 3.0%), SD (0.0121)"
+  },
+  {
+    "row": 1580,
+    "sid": "SO308-40519-ST8-1700",
+    "station": "ST-8",
+    "depth": 1700,
+    "injs_14": [
+      2.349,
+      2.57,
+      2.588,
+      2.509
+    ],
+    "formula_14": "=AVERAGE(G1580,H1580,I1580)",
+    "rsd_formula_14": "=STDEV(G1580,H1580,I1580)/J1580*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.6% <= 3.0%), SD (0.0414)"
+  },
+  {
+    "row": 1581,
+    "sid": "SO308-40520-ST8-1600",
+    "station": "ST-8",
+    "depth": 1600,
+    "injs_14": [
+      2.347,
+      2.384,
+      2.428,
+      2.348
+    ],
+    "formula_14": "=AVERAGE(F1581,G1581,I1581)",
+    "rsd_formula_14": "=STDEV(F1581,G1581,I1581)/J1581*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.9% <= 3.0%), SD (0.0211)"
+  },
+  {
+    "row": 1582,
+    "sid": "SO308-40521-ST8-1500",
+    "station": "ST-8",
+    "depth": 1500,
+    "injs_14": [
+      0.0623,
+      0.188,
+      0.0818,
+      0
+    ],
+    "formula_14": "=AVERAGE(F1582,H1582,I1582)",
+    "rsd_formula_14": "=STDEV(F1582,H1582,I1582)/J1582*100",
+    "flag_dst": 3,
+    "flag_14": 4,
+    "comment_14": "Rejected: High injection RSD (88.9% > 5.0%)"
+  },
+  {
+    "row": 1583,
+    "sid": "SO308-40522-ST8-1400",
+    "station": "ST-8",
+    "depth": 1400,
+    "injs_14": [
+      2.412,
+      2.521,
+      2.157,
+      2.385
+    ],
+    "formula_14": "=AVERAGE(F1583,G1583,I1583)",
+    "rsd_formula_14": "=STDEV(F1583,G1583,I1583)/J1583*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (3.0% <= 3.0%), SD (0.0720)"
+  },
+  {
+    "row": 1589,
+    "sid": "SO308-40523-ST8-1500",
+    "station": "ST-8",
+    "depth": 1500,
+    "injs_14": [
+      2.229,
+      2.601,
+      2.541,
+      2.512
+    ],
+    "formula_14": "=AVERAGE(G1589,H1589,I1589)",
+    "rsd_formula_14": "=STDEV(G1589,H1589,I1589)/J1589*100",
+    "flag_dst": 4,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.8% <= 3.0%), SD (0.0454)"
+  },
+  {
+    "row": 1590,
+    "sid": "SO308-40524-ST8-1300",
+    "station": "ST-8",
+    "depth": 1300,
+    "injs_14": [
+      2.434,
+      2.469,
+      2.657,
+      2.474
+    ],
+    "formula_14": "=AVERAGE(F1590,G1590,I1590)",
+    "rsd_formula_14": "=STDEV(F1590,G1590,I1590)/J1590*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.9% <= 3.0%), SD (0.0218)"
+  },
+  {
+    "row": 1592,
+    "sid": "SO308-40525-ST8-1200",
+    "station": "ST-8",
+    "depth": 1200,
+    "injs_14": [
+      2.374,
+      2.562,
+      2.405,
+      2.351
+    ],
+    "formula_14": "=AVERAGE(F1592,H1592,I1592)",
+    "rsd_formula_14": "=STDEV(F1592,H1592,I1592)/J1592*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.1% <= 3.0%), SD (0.0271)"
+  },
+  {
+    "row": 1593,
+    "sid": "SO308-40526-ST8-1100",
+    "station": "ST-8",
+    "depth": 1100,
+    "injs_14": [
+      2.355,
+      2.317,
+      2.206,
+      2.401
+    ],
+    "formula_14": "=AVERAGE(F1593,G1593,I1593)",
+    "rsd_formula_14": "=STDEV(F1593,G1593,I1593)/J1593*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.8% <= 3.0%), SD (0.0421)"
+  },
+  {
+    "row": 1596,
+    "sid": "SO308-40527-ST8-1000",
+    "station": "ST-8",
+    "depth": 1000,
+    "injs_14": [
+      2.362,
+      2.523,
+      2.52,
+      2.529
+    ],
+    "formula_14": "=AVERAGE(G1596,H1596,I1596)",
+    "rsd_formula_14": "=STDEV(G1596,H1596,I1596)/J1596*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (0.2% <= 3.0%), SD (0.0046)"
+  },
+  {
+    "row": 1597,
+    "sid": "SO308-40528-ST8-900",
+    "station": "ST-8",
+    "depth": 900,
+    "injs_14": [
+      2.505,
+      2.819,
+      2.454,
+      2.443
+    ],
+    "formula_14": "=AVERAGE(F1597,H1597,I1597)",
+    "rsd_formula_14": "=STDEV(F1597,H1597,I1597)/J1597*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.3% <= 3.0%), SD (0.0331)"
+  },
+  {
+    "row": 1656,
+    "sid": "SO308-40197-ST7-235",
+    "station": "ST-7",
+    "depth": 235,
+    "injs_14": [
+      3.057,
+      3.112,
+      2.943,
+      2.838
+    ],
+    "formula_14": "=AVERAGE(F1656,G1656,H1656)",
+    "rsd_formula_14": "=STDEV(F1656,G1656,H1656)/J1656*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.8% <= 3.0%), SD (0.0862)"
+  },
+  {
+    "row": 1669,
+    "sid": "SO308-40204-ST7-110",
+    "station": "ST-7",
+    "depth": 110,
+    "injs_14": [
+      4.054,
+      3.868,
+      4.495,
+      3.966
+    ],
+    "formula_14": "=AVERAGE(F1669,G1669,I1669)",
+    "rsd_formula_14": "=STDEV(F1669,G1669,I1669)/J1669*100",
+    "flag_dst": 2,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.3% <= 3.0%), SD (0.0930)"
+  },
+  {
+    "row": 1671,
+    "sid": "SO308-40205-ST7-100",
+    "station": "ST-7",
+    "depth": 100,
+    "injs_14": [
+      3.778,
+      4.144,
+      3.982,
+      3.841
+    ],
+    "formula_14": "=AVERAGE(F1671,H1671,I1671)",
+    "rsd_formula_14": "=STDEV(F1671,H1671,I1671)/J1671*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.7% <= 3.0%), SD (0.1045)"
+  },
+  {
+    "row": 1697,
+    "sid": "SW1",
+    "station": "-",
+    "depth": "0",
+    "injs_14": [
+      15.63,
+      15.77,
+      16.19,
+      15.79
+    ],
+    "formula_14": "=AVERAGE(N1697,P1697,T1697)",
+    "rsd_formula_14": "=STDEV(N1697,P1697,T1697)/J1697*100",
+    "flag_dst": 2,
+    "flag_14": 4,
+    "comment_14": "Rejected: Extreme concentration spike anomaly (322.1 uM > 180 uM)"
+  },
+  {
+    "row": 1754,
+    "sid": "SO308-40148-ST6-32",
+    "station": "ST-6",
+    "depth": 32,
+    "injs_14": [
+      3.945,
+      4.347,
+      4.002,
+      4.024
+    ],
+    "formula_14": "=AVERAGE(F1754,H1754,I1754)",
+    "rsd_formula_14": "=STDEV(F1754,H1754,I1754)/J1754*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (1.0% <= 3.0%), SD (0.0408)"
+  },
+  {
+    "row": 1776,
+    "sid": "SO308-40159-ST4-560",
+    "station": "ST-4",
+    "depth": 560,
+    "injs_14": [
+      2.872,
+      3.009,
+      2.753,
+      3.004
+    ],
+    "formula_14": "=AVERAGE(F1776,G1776,I1776)",
+    "rsd_formula_14": "=STDEV(F1776,G1776,I1776)/J1776*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.6% <= 3.0%), SD (0.0777)"
+  },
+  {
+    "row": 1779,
+    "sid": "SO308-40162-ST4-450",
+    "station": "ST-4",
+    "depth": 450,
+    "injs_14": [
+      2.898,
+      2.659,
+      3.005,
+      2.906
+    ],
+    "formula_14": "=AVERAGE(F1779,H1779,I1779)",
+    "rsd_formula_14": "=STDEV(F1779,H1779,I1779)/J1779*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.0% <= 3.0%), SD (0.0596)"
+  },
+  {
+    "row": 1789,
+    "sid": "SO308-40168-ST4-250",
+    "station": "ST-4",
+    "depth": 250,
+    "injs_14": [
+      2.976,
+      3.062,
+      2.899,
+      3.28
+    ],
+    "formula_14": "=AVERAGE(F1789,G1789,H1789)",
+    "rsd_formula_14": "=STDEV(F1789,G1789,H1789)/J1789*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.7% <= 3.0%), SD (0.0815)"
+  },
+  {
+    "row": 1807,
+    "sid": "SO308-40170-ST4-200",
+    "station": "ST-4",
+    "depth": 200,
+    "injs_14": [
+      3.175,
+      2.868,
+      2.829,
+      3.008
+    ],
+    "formula_14": "=AVERAGE(G1807,H1807,I1807)",
+    "rsd_formula_14": "=STDEV(G1807,H1807,I1807)/J1807*100",
+    "flag_dst": 3,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.2%)"
+  },
+  {
+    "row": 1809,
+    "sid": "SO308-40172-ST4-150",
+    "station": "ST-4",
+    "depth": 150,
+    "injs_14": [
+      2.811,
+      3.038,
+      3.092,
+      2.967
+    ],
+    "formula_14": "=AVERAGE(G1809,H1809,I1809)",
+    "rsd_formula_14": "=STDEV(G1809,H1809,I1809)/J1809*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.1% <= 3.0%), SD (0.0627)"
+  },
+  {
+    "row": 1823,
+    "sid": "SO308-40178-ST4-45",
+    "station": "ST-4",
+    "depth": 45,
+    "injs_14": [
+      3.219,
+      3.452,
+      3.494,
+      3.615
+    ],
+    "formula_14": "=AVERAGE(G1823,H1823,I1823)",
+    "rsd_formula_14": "=STDEV(G1823,H1823,I1823)/J1823*100",
+    "flag_dst": 3,
+    "flag_14": 2,
+    "comment_14": "Acceptable: Low injection RSD (2.4% <= 3.0%), SD (0.0846)"
+  },
+  {
+    "row": 1847,
+    "sid": "SO308-40188-ST3-75",
+    "station": "ST-3",
+    "depth": 75,
+    "injs_14": [
+      3.547,
+      3.821,
+      3.561,
+      3.866
+    ],
+    "formula_14": "=AVERAGE(F1847,G1847,H1847)",
+    "rsd_formula_14": "=STDEV(F1847,G1847,H1847)/J1847*100",
+    "flag_dst": 2,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (4.2%)"
+  },
+  {
+    "row": 1857,
+    "sid": "SO308-40195-ST2-65",
+    "station": "ST-2",
+    "depth": 65,
+    "injs_14": [
+      3.182,
+      3.517,
+      3.137,
+      3.339
+    ],
+    "formula_14": "=AVERAGE(F1857,H1857,I1857)",
+    "rsd_formula_14": "=STDEV(F1857,H1857,I1857)/J1857*100",
+    "flag_dst": 2,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.3%)"
+  },
+  {
+    "row": 1869,
+    "sid": "SO308-40204-ST1-55",
+    "station": "ST-1",
+    "depth": 55,
+    "injs_14": [
+      3.357,
+      3.211,
+      3.484,
+      3.121
+    ],
+    "formula_14": "=AVERAGE(F1869,G1869,I1869)",
+    "rsd_formula_14": "=STDEV(F1869,G1869,I1869)/J1869*100",
+    "flag_dst": 2,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.7%)"
+  },
+  {
+    "row": 1882,
+    "sid": "SO308-40210-ST19-200",
+    "station": "ST-19",
+    "depth": 200,
+    "injs_14": [
+      3.096,
+      3.531,
+      3.284,
+      3.294
+    ],
+    "formula_14": "=AVERAGE(F1882,H1882,I1882)",
+    "rsd_formula_14": "=STDEV(F1882,H1882,I1882)/J1882*100",
+    "flag_dst": 2,
+    "flag_14": 3,
+    "comment_14": "Questionable: Moderate injection RSD (3.5%)"
+  }
+]
